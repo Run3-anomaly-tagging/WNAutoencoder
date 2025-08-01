@@ -5,7 +5,7 @@ from torch.utils.data import Dataset
 from utils.h5_helpers import extract_hidden_features
 
 class JetDataset(Dataset):
-    def __init__(self, filepath, indices=None, input_dim=None, key="Jets"):
+    def __init__(self, filepath, indices=None, input_dim=None, key="Jets", mean=None, std=None):
         self.file = h5py.File(filepath, 'r')
         self.jets = self.file[key]
 
@@ -13,6 +13,14 @@ class JetDataset(Dataset):
         self.indices = np.arange(self.total_len) if indices is None else np.array(indices)
 
         self.input_dim = input_dim  # max features to return, None means all
+        
+        # Store mean and std as torch tensors for rescaling if given
+        if mean is not None and std is not None:
+            self.mean = torch.tensor(mean, dtype=torch.float32)
+            self.std = torch.tensor(std, dtype=torch.float32)
+        else:
+            self.mean = None
+            self.std = None
 
     def __len__(self):
         return len(self.indices)
@@ -26,8 +34,11 @@ class JetDataset(Dataset):
 
         features_tensor = torch.tensor(features)
 
+        # Rescale features if mean/std are provided
+        if self.mean is not None and self.std is not None:
+            features_tensor = (features_tensor - self.mean[:len(features_tensor)]) / self.std[:len(features_tensor)]
+
         return features_tensor, features_tensor  # x == y for autoencoder
 
     def close(self):
         self.file.close()
-

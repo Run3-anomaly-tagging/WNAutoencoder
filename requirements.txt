@@ -5,3 +5,4 @@ torch>=2.1.0
 h5py
 tqdm
 matplotlib
+scikit-learn
