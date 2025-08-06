@@ -6,15 +6,15 @@ from sklearn.metrics import roc_curve, auc
 
 from utils.jet_dataset import JetDataset
 from wnae import WNAE
-from train import Encoder, Decoder 
+from train_shallow import Encoder, Decoder #This is important because it defines the models!
 import h5py
 
 # --- Configuration ---
-FILEPATH = "/uscms_data/d3/roguljic/AnomalyTagging/el9/AutoencoderTraining/data/auc_qcd_H_signal.h5"
-SCALING_FILEPATH = "/uscms/home/roguljic/nobackup/AnomalyTagging/el9/AutoencoderTraining/data/merged_qcd_train_scaled.h5"
+FILEPATH = "/uscms_data/d3/roguljic/AnomalyTagging/el9/AutoencoderTraining/data/auc_qcd_H_signal_scaled.h5"
+SAVEDIR = "shallow"
 BATCH_SIZE = 512
 INPUT_DIM = 256
-CHECKPOINT_PATH = f"wnae_checkpoint_{INPUT_DIM}.pth"
+CHECKPOINT_PATH = f"{SAVEDIR}/wnae_checkpoint_{INPUT_DIM}.pth"
 MAX_JETS = 10000
 DEVICE = torch.device("cpu")
 WNAE_PARAMS = {
@@ -30,11 +30,6 @@ WNAE_PARAMS = {
     "replay_ratio": 0.95,
     "buffer_size": 10000,
 }
-
-# --- Load datasets ---
-with h5py.File(SCALING_FILEPATH, "r") as f:
-    mean = f["hidNeurons_means"][:]
-    std = f["hidNeurons_stds"][:]
 
 bkg_dataset = JetDataset(FILEPATH, input_dim=INPUT_DIM, key="Jets_Bkg")
 sig_dataset = JetDataset(FILEPATH, input_dim=INPUT_DIM, key="Jets_Signal")
@@ -61,7 +56,6 @@ model.load_state_dict(torch.load(CHECKPOINT_PATH, map_location=DEVICE)["model_st
 model.to(DEVICE)
 model.eval()
 
-# --- Helper to collect per-sample MSE losses ---
 def compute_losses(dataloader):
     losses = []
     for batch in dataloader:
@@ -83,12 +77,14 @@ print(len(sig_losses))
 
 # --- Plot loss distributions ---
 plt.figure()
-plt.hist(bkg_losses, bins=50, histtype='step',  label="QCD (background)", density=True)
-plt.hist(sig_losses, bins=50, histtype='step',   label="H->bb (signal)", density=True)
+range_min, range_max = 0, 1000 
+plt.hist(bkg_losses, bins=50, histtype='step',  label="QCD (background)", density=True, range=(range_min, range_max))
+plt.hist(sig_losses, bins=50, histtype='step',   label="H->bb (signal)", density=True, range=(range_min, range_max))
 plt.xlabel("Reconstruction MSE")
 plt.ylabel("Density")
+plt.xlim(range_min, range_max)
 plt.legend()
-plt.savefig("plots/loss_distributions.png")
+plt.savefig(f"{SAVEDIR}/plots/loss_distributions.png")
 plt.close()
 
 # --- ROC Curve ---
@@ -105,7 +101,7 @@ plt.ylabel("True Positive Rate")
 plt.title("Receiver Operating Characteristic")
 plt.legend(loc="lower right")
 plt.grid(True, alpha=0.3)
-plt.savefig("plots/roc_curve.png")
+plt.savefig(f"{SAVEDIR}/plots/roc_curve.png")
 plt.close()
 
 print(f"[INFO] Evaluation complete. AUC: {roc_auc:.4f}")

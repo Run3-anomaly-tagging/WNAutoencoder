@@ -95,7 +95,7 @@ PLOT_PATH = f"{SAVEDIR}/plots/training_loss_plot.png"
 BATCH_SIZE = 512
 NUM_SAMPLES = 2 ** 15
 LEARNING_RATE = 1e-3
-N_EPOCHS = 10
+N_EPOCHS = 20
 
 WNAE_PARAMS = {
     "sampling": "pcd",
@@ -198,7 +198,7 @@ def main():
         start_epoch=start_epoch,
         training_losses=training_losses,
         validation_losses=validation_losses,
-        #checkpoint_prefix="training"
+        checkpoint_prefix="training"
     )
 
     # Plot
