@@ -8,13 +8,15 @@ from torch.utils.data import DataLoader, SequentialSampler
 
 from utils.jet_dataset import JetDataset
 from wnae import WNAE
-from train_shallow import Encoder, Decoder
+from model_registry import MODEL_REGISTRY
 
 # --- Configuration ---
 CONFIG_PATH = "dataset_config.json"
-SAVEDIR = "shallow"
 BATCH_SIZE = 512
-INPUT_DIM = 256
+MODEL_NAME = "shallow"
+model_config = MODEL_REGISTRY[MODEL_NAME]
+INPUT_DIM = model_config["input_dim"]
+SAVEDIR = model_config["savedir"]
 CHECKPOINT_PATH = f"{SAVEDIR}/wnae_checkpoint_{INPUT_DIM}.pth"
 MAX_JETS = 10000
 DEVICE = torch.device("cpu")
@@ -53,7 +55,7 @@ for name, sample in config["signal_samples"].items():
     sig_dataset = load_dataset(sample["path"], max_jets=MAX_JETS)
     signal_loaders[name] = DataLoader(sig_dataset, batch_size=BATCH_SIZE, sampler=SequentialSampler(sig_dataset))
 
-model = WNAE(encoder=Encoder(INPUT_DIM), decoder=Decoder(INPUT_DIM), **WNAE_PARAMS)
+model = WNAE(encoder=model_config["encoder"](),decoder=model_config["decoder"](),**WNAE_PARAMS)
 model.load_state_dict(torch.load(CHECKPOINT_PATH, map_location=DEVICE)["model_state_dict"])
 model.to(DEVICE)
 model.eval()
@@ -77,9 +79,10 @@ for name, loader in signal_loaders.items():
 
 # --- Loss Ditributions ---
 plt.figure()
-plt.hist(bkg_losses, bins=50, histtype='step', label="QCD (background)", density=True)
+bins = np.linspace(0, 1500, 151)
+plt.hist(bkg_losses, bins=bins, histtype='step', label="QCD (background)", density=True)
 for name, losses in sig_losses_dict.items():
-    plt.hist(losses, bins=50, histtype='step', label=name, density=True)
+    plt.hist(losses, bins=bins, histtype='step', label=name, density=True)
 plt.xlabel("Reconstruction MSE")
 plt.ylabel("Density")
 plt.legend()
@@ -98,7 +101,7 @@ for name, sig_losses in sig_losses_dict.items():
     scores = np.concatenate([bkg_losses, sig_losses])
     fpr, tpr, _ = roc_curve(labels, scores)
     roc_auc = auc(fpr, tpr)
-    plt.plot(fpr, tpr, label=f"{name} (AUC = {roc_auc:.4f})")
+    plt.plot(fpr, tpr, label=f"{name} (AUC = {roc_auc:.3f})")
 
 plt.plot([0, 1], [0, 1], color="navy", lw=1, linestyle="--")
 plt.xlabel("False Positive Rate")
