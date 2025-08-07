@@ -142,6 +142,7 @@ def apply_scaling_and_save(input_fp, output_fp, mean, std, keys=("Jets_Bkg", "Je
     with h5py.File(input_fp, 'r') as fin, h5py.File(output_fp, 'w') as fout:
         for key in keys:
             if key not in fin:
+                print(list(fin.keys()))
                 print(f"[WARNING] Key '{key}' not found in input file. Skipping.")
                 continue
 
@@ -177,5 +178,17 @@ if __name__ == "__main__":
 
     input_filepath_eval = "/uscms_data/d3/roguljic/AnomalyTagging/el9/AutoencoderTraining/data/auc_qcd_H_signal.h5"
     output_filepath_eval = "/uscms_data/d3/roguljic/AnomalyTagging/el9/AutoencoderTraining/data/auc_qcd_H_signal_scaled.h5"
-    apply_scaling_and_save(input_filepath_eval, output_filepath_eval, mean, std, keys=("Jets_Bkg", "Jets_Signal"), batch_size=1000)
-    plot_feature_comparisons_bkg_vs_sig(output_filepath_eval, "scaled_feature_histograms")
+    #apply_scaling_and_save(input_filepath_eval, output_filepath_eval, mean, std, keys=("Jets_Bkg", "Jets_Signal"), batch_size=1000)
+    #plot_feature_comparisons_bkg_vs_sig(output_filepath_eval, "scaled_feature_histograms")
+
+    input_filepath = "/uscms/home/ecakir/nobackup/jet_pt_h5/2022/GluGluHto2B.h5"
+    output_filepath = "/uscms/home/roguljic/nobackup/AnomalyTagging/el9/AutoencoderTraining/data/GluGluHto2B_scaled.h5"
+    apply_scaling_and_save(input_filepath, output_filepath, mean, std, keys=["Jets"], batch_size=1000)
+
+    input_filepath = "/uscms/home/roguljic/nobackup/AnomalyTagging/el9/AutoencoderTraining/data/svj.h5"
+    output_filepath = "/uscms/home/roguljic/nobackup/AnomalyTagging/el9/AutoencoderTraining/data/svj_scaled.h5"
+    apply_scaling_and_save(input_filepath, output_filepath, mean, std, keys=["Jets"], batch_size=1000)
+
+    input_filepath = "/uscms/home/ecakir/nobackup/jet_pt_h5/2022/TTto4Q.h5"
+    output_filepath = "/uscms/home/roguljic/nobackup/AnomalyTagging/el9/AutoencoderTraining/data/TTto4Q_scaled.h5"
+    apply_scaling_and_save(input_filepath, output_filepath, mean, std, keys=["Jets"], batch_size=1000)
