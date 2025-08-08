@@ -13,7 +13,7 @@ from model_registry import MODEL_REGISTRY
 # --- Configuration ---
 CONFIG_PATH = "dataset_config.json"
 BATCH_SIZE = 512
-MODEL_NAME = "shallow"
+MODEL_NAME = "deep"
 model_config = MODEL_REGISTRY[MODEL_NAME]
 INPUT_DIM = model_config["input_dim"]
 SAVEDIR = model_config["savedir"]
@@ -79,17 +79,19 @@ for name, loader in signal_loaders.items():
 
 # --- Loss Ditributions ---
 plt.figure()
-bins = np.linspace(0, 1500, 151)
+xmin = 0
+xmax = 500
+bins = np.linspace(0, 500, 101)
 plt.hist(bkg_losses, bins=bins, histtype='step', label="QCD (background)", density=True)
 for name, losses in sig_losses_dict.items():
     plt.hist(losses, bins=bins, histtype='step', label=name, density=True)
 plt.xlabel("Reconstruction MSE")
 plt.ylabel("Density")
+plt.xlim([xmin,xmax])
 plt.legend()
 plt.grid(True, alpha=0.3)
-plt.title("Loss Distributions")
 savefig = f"{SAVEDIR}/plots/loss_distributions_multi_signal.png"
-plt.savefig(savefig)
+plt.savefig(savefig,dpi=200)
 print(f"Saved {savefig}")
 plt.close()
 
@@ -106,11 +108,10 @@ for name, sig_losses in sig_losses_dict.items():
 plt.plot([0, 1], [0, 1], color="navy", lw=1, linestyle="--")
 plt.xlabel("False Positive Rate")
 plt.ylabel("True Positive Rate")
-plt.title("ROC Curve: QCD vs Multiple Signals")
 plt.legend(loc="lower right")
 plt.grid(True, alpha=0.3)
 savefig = f"{SAVEDIR}/plots/roc_curve_multi_signal.png"
-plt.savefig(savefig)
+plt.savefig(savefig,dpi=200)
 print(f"Saved {savefig}")
 plt.close()
 
