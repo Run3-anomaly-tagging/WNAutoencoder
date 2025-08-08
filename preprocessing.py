@@ -8,6 +8,8 @@ from utils.jet_dataset import JetDataset
 
 
 def plot_feature_comparisons_bkg_vs_sig(h5_file, output_dir, key_bkg="Jets_Bkg", key_sig="Jets_Signal"):
+    # Plot and save histograms comparing each feature's distribution between background and signal jets.
+    # To be adapted to work with two files (this version only works with single file that contains both  bkg and signal jets)
     def plot_feature_comparison(bkg_vals, sig_vals, output_path, title=""):
         plt.figure(figsize=(4, 3))
         bins = 50
@@ -47,6 +49,7 @@ def plot_feature_comparisons_bkg_vs_sig(h5_file, output_dir, key_bkg="Jets_Bkg",
 
 
 def plot_feature(feature_vals,output_path,title="",percentiles=[]):
+    # Plot and save a histogram of a single feature's values, optionally annotating percentiles within specified ranges.
     plt.figure(figsize=(4, 3))
     plt.hist(feature_vals, bins=50, color='lightgreen', edgecolor='black', range=(-5, 5))
     plt.title(title)
@@ -66,6 +69,7 @@ def plot_feature(feature_vals,output_path,title="",percentiles=[]):
 
 
 def compute_stats_on_sample(h5file, dataset_name='Jets', sample_size=10000):
+    # Compute mean and standard deviation of 'hidNeurons' features on a random sample from the dataset.
     dset = h5file[dataset_name]
     n = len(dset)
     sample_size = min(sample_size, n)
@@ -77,6 +81,7 @@ def compute_stats_on_sample(h5file, dataset_name='Jets', sample_size=10000):
     return means, stds
 
 def scale_and_save(input_fp, output_fp, batch_size=1000):
+    # Scale 'hidNeurons' features of all jets in input file to zero mean and unit variance, then save to output file.
     with h5py.File(input_fp, 'r') as fin:
         jets_in = fin['Jets']
         n_jets = len(jets_in)
@@ -109,6 +114,7 @@ def scale_and_save(input_fp, output_fp, batch_size=1000):
     print(f"Scaling complete. Output saved to {output_fp}")
 
 def sanity_check_scaled_features(filepath, hist_dir="scaled_feature_histograms"):
+    # Perform sanity checks by sampling scaled features, printing statistics, and saving feature histograms.
     print(f"Running sanity check on scaled features from {filepath}")
     
     os.makedirs(hist_dir, exist_ok=True)
@@ -139,6 +145,7 @@ def sanity_check_scaled_features(filepath, hist_dir="scaled_feature_histograms")
 
 
 def apply_scaling_and_save(input_fp, output_fp, mean, std, keys=("Jets_Bkg", "Jets_Signal"), batch_size=1000):
+    # Apply given scaling (mean/std) to specified datasets in input file and save the scaled data to output file.
     with h5py.File(input_fp, 'r') as fin, h5py.File(output_fp, 'w') as fout:
         for key in keys:
             if key not in fin:
@@ -170,14 +177,20 @@ if __name__ == "__main__":
     batch_size = 20000
     sample_size = 20000  # for computing mean/std
 
+    # Uncomment to perform scaling of training data (QCD jets) and save scaled output and saling parameters.
     #scale_and_save(input_filepath, output_filepath, batch_size=batch_size)
+    # Uncomment to run a sanity check on the scaled features by printing stats and saving histograms.
     #sanity_check_scaled_features(output_filepath)
+
+    # Load precomputed mean and std from the scaled training file to apply the same scaling elsewhere.
     with h5py.File(output_filepath, "r") as f:
         mean = f["hidNeurons_means"][:]
         std = f["hidNeurons_stds"][:]
 
     input_filepath_eval = "/uscms_data/d3/roguljic/AnomalyTagging/el9/AutoencoderTraining/data/auc_qcd_H_signal.h5"
     output_filepath_eval = "/uscms_data/d3/roguljic/AnomalyTagging/el9/AutoencoderTraining/data/auc_qcd_H_signal_scaled.h5"
+
+    # Uncomment to apply scaling to evaluation datasets (background and signal) using precomputed mean/std.
     #apply_scaling_and_save(input_filepath_eval, output_filepath_eval, mean, std, keys=("Jets_Bkg", "Jets_Signal"), batch_size=1000)
     #plot_feature_comparisons_bkg_vs_sig(output_filepath_eval, "scaled_feature_histograms")
 
