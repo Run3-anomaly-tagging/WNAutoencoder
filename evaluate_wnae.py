@@ -1,29 +1,33 @@
-import torch
+import os
+import json
 import numpy as np
+import torch
 import matplotlib.pyplot as plt
-from torch.utils.data import DataLoader, SequentialSampler
 from sklearn.metrics import roc_curve, auc
+from torch.utils.data import DataLoader, SequentialSampler
 
 from utils.jet_dataset import JetDataset
 from wnae import WNAE
-from train import Encoder, Decoder 
-import h5py
+from model_registry import MODEL_REGISTRY
 
 # --- Configuration ---
-FILEPATH = "/uscms_data/d3/roguljic/AnomalyTagging/el9/AutoencoderTraining/data/auc_qcd_H_signal.h5"
-SCALING_FILEPATH = "/uscms/home/roguljic/nobackup/AnomalyTagging/el9/AutoencoderTraining/data/merged_qcd_train_scaled.h5"
+CONFIG_PATH = "dataset_config.json"
 BATCH_SIZE = 512
-INPUT_DIM = 256
-CHECKPOINT_PATH = f"wnae_checkpoint_{INPUT_DIM}.pth"
+MODEL_NAME = "deep"
+model_config = MODEL_REGISTRY[MODEL_NAME]
+INPUT_DIM = model_config["input_dim"]
+SAVEDIR = model_config["savedir"]
+CHECKPOINT_PATH = f"{SAVEDIR}/wnae_checkpoint_{INPUT_DIM}.pth"
 MAX_JETS = 10000
 DEVICE = torch.device("cpu")
+
 WNAE_PARAMS = {
     "sampling": "pcd",
     "n_steps": 10,
     "step_size": None,
     "noise": 0.2,
     "temperature": 0.05,
-    "bounds": (-3.,3.),
+    "bounds": (-3., 3.),
     "mh": False,
     "initial_distribution": "gaussian",
     "replay": True,
@@ -31,81 +35,84 @@ WNAE_PARAMS = {
     "buffer_size": 10000,
 }
 
-# --- Load datasets ---
-with h5py.File(SCALING_FILEPATH, "r") as f:
-    mean = f["hidNeurons_means"][:]
-    std = f["hidNeurons_stds"][:]
+os.makedirs(f"{SAVEDIR}/plots", exist_ok=True)
 
-bkg_dataset = JetDataset(FILEPATH, input_dim=INPUT_DIM, key="Jets_Bkg")
-sig_dataset = JetDataset(FILEPATH, input_dim=INPUT_DIM, key="Jets_Signal")
+with open(CONFIG_PATH, "r") as f:
+    config = json.load(f)
 
-n_bkg = min(len(bkg_dataset), MAX_JETS)
-n_sig = min(len(sig_dataset), MAX_JETS)
+def load_dataset(file_path, key="Jets", max_jets=10000):
+    dataset = JetDataset(file_path, input_dim=INPUT_DIM, key=key)
+    indices = np.random.choice(len(dataset), size=min(len(dataset), max_jets), replace=False)
+    return JetDataset(file_path, input_dim=INPUT_DIM, indices=indices)
 
-bkg_indices = np.random.choice(len(bkg_dataset), size=n_bkg, replace=False)
-sig_indices = np.random.choice(len(sig_dataset), size=n_sig, replace=False)
 
-bkg_dataset = JetDataset(FILEPATH, input_dim=INPUT_DIM, key="Jets_Bkg", indices=bkg_indices)
-sig_dataset = JetDataset(FILEPATH, input_dim=INPUT_DIM, key="Jets_Signal", indices=sig_indices)
-
+bkg_path = config["qcd_samples"]["QCD_merged"]["path"]
+bkg_dataset = load_dataset(bkg_path, max_jets=MAX_JETS)
 bkg_loader = DataLoader(bkg_dataset, batch_size=BATCH_SIZE, sampler=SequentialSampler(bkg_dataset))
-sig_loader = DataLoader(sig_dataset, batch_size=BATCH_SIZE, sampler=SequentialSampler(sig_dataset))
 
-# --- Initialize model ---
-model = WNAE(
-        encoder=Encoder(INPUT_DIM),
-        decoder=Decoder(INPUT_DIM),
-        **WNAE_PARAMS
-    )
+signal_loaders = {}
+for name, sample in config["signal_samples"].items():
+    sig_dataset = load_dataset(sample["path"], max_jets=MAX_JETS)
+    signal_loaders[name] = DataLoader(sig_dataset, batch_size=BATCH_SIZE, sampler=SequentialSampler(sig_dataset))
+
+model = WNAE(encoder=model_config["encoder"](),decoder=model_config["decoder"](),**WNAE_PARAMS)
 model.load_state_dict(torch.load(CHECKPOINT_PATH, map_location=DEVICE)["model_state_dict"])
 model.to(DEVICE)
 model.eval()
 
-# --- Helper to collect per-sample MSE losses ---
 def compute_losses(dataloader):
     losses = []
     for batch in dataloader:
         x = batch[0].to(DEVICE)
-        recon_x = model.encoder(x)
-        recon_x = model.decoder(recon_x)  
+        recon_x = model.decoder(model.encoder(x))
         per_sample_loss = torch.mean((x - recon_x) ** 2, dim=1)
-        losses.extend(per_sample_loss.detach().cpu().numpy())  
+        losses.extend(per_sample_loss.detach().cpu().numpy())
     return np.array(losses)
 
-
-
-# --- Compute losses ---
+print("[INFO] Computing background losses...")
 bkg_losses = compute_losses(bkg_loader)
-sig_losses = compute_losses(sig_loader)
 
-print(len(bkg_losses))
-print(len(sig_losses))
+sig_losses_dict = {}
+for name, loader in signal_loaders.items():
+    print(f"[INFO] Computing losses for signal: {name}")
+    sig_losses_dict[name] = compute_losses(loader)
 
-# --- Plot loss distributions ---
+# --- Loss Ditributions ---
 plt.figure()
-plt.hist(bkg_losses, bins=50, histtype='step',  label="QCD (background)", density=True)
-plt.hist(sig_losses, bins=50, histtype='step',   label="H->bb (signal)", density=True)
+xmin = 0
+xmax = 500
+bins = np.linspace(0, 500, 101)
+plt.hist(bkg_losses, bins=bins, histtype='step', label="QCD (background)", density=True)
+for name, losses in sig_losses_dict.items():
+    plt.hist(losses, bins=bins, histtype='step', label=name, density=True)
 plt.xlabel("Reconstruction MSE")
 plt.ylabel("Density")
+plt.xlim([xmin,xmax])
 plt.legend()
-plt.savefig("plots/loss_distributions.png")
+plt.grid(True, alpha=0.3)
+savefig = f"{SAVEDIR}/plots/loss_distributions_multi_signal.png"
+plt.savefig(savefig,dpi=200)
+print(f"Saved {savefig}")
 plt.close()
 
-# --- ROC Curve ---
-all_losses = np.concatenate([bkg_losses, sig_losses])
-all_labels = np.concatenate([np.zeros_like(bkg_losses), np.ones_like(sig_losses)])
-fpr, tpr, _ = roc_curve(all_labels, all_losses)
-roc_auc = auc(fpr, tpr)
-
+# --- ROC Curves ---
 plt.figure()
-plt.plot(fpr, tpr, label=f"ROC curve (AUC = {roc_auc:.4f})", color="darkorange", lw=2)
+all_labels = np.zeros_like(bkg_losses)
+for name, sig_losses in sig_losses_dict.items():
+    labels = np.concatenate([all_labels, np.ones_like(sig_losses)])
+    scores = np.concatenate([bkg_losses, sig_losses])
+    fpr, tpr, _ = roc_curve(labels, scores)
+    roc_auc = auc(fpr, tpr)
+    plt.plot(fpr, tpr, label=f"{name} (AUC = {roc_auc:.3f})")
+
 plt.plot([0, 1], [0, 1], color="navy", lw=1, linestyle="--")
 plt.xlabel("False Positive Rate")
 plt.ylabel("True Positive Rate")
-plt.title("Receiver Operating Characteristic")
 plt.legend(loc="lower right")
 plt.grid(True, alpha=0.3)
-plt.savefig("plots/roc_curve.png")
+savefig = f"{SAVEDIR}/plots/roc_curve_multi_signal.png"
+plt.savefig(savefig,dpi=200)
+print(f"Saved {savefig}")
 plt.close()
 
-print(f"[INFO] Evaluation complete. AUC: {roc_auc:.4f}")
+print("[INFO] Evaluation complete.")

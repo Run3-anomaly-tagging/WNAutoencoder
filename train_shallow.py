@@ -6,40 +6,6 @@ from tqdm import tqdm
 from torch.utils.data import DataLoader, RandomSampler
 from utils.jet_dataset import JetDataset
 from wnae import WNAE
-from model_registry import MODEL_REGISTRY
-import os
-
-# ------------------- Config ------------------- #
-
-DATA_PATH = "/uscms/home/roguljic/nobackup/AnomalyTagging/el9/AutoencoderTraining/data/merged_qcd_train_scaled.h5"
-MODEL_NAME = "deep"
-model_config = MODEL_REGISTRY[MODEL_NAME]
-
-INPUT_DIM = model_config["input_dim"]
-SAVEDIR = model_config["savedir"]
-CHECKPOINT_PATH = f"{SAVEDIR}/wnae_checkpoint_{INPUT_DIM}.pth"
-PLOT_PATH = f"{SAVEDIR}/plots/training_loss_plot.png"
-
-BATCH_SIZE = 512
-NUM_SAMPLES = 2 ** 15
-LEARNING_RATE = 1e-3
-N_EPOCHS = 5
-
-WNAE_PARAMS = {
-    "sampling": "pcd",
-    "n_steps": 10,
-    "step_size": None,
-    "noise": 0.2,
-    "temperature": 0.05,
-    "bounds": (-3.,3.),
-    "mh": False,
-    "initial_distribution": "gaussian",
-    "replay": True,
-    "replay_ratio": 0.95,
-    "buffer_size": 10000,
-}
-DEVICE = torch.device("cpu")
-# -------------------  ------------------- #
 
 def run_training(model, optimizer, loss_function, n_epochs, training_loader, validation_loader,
                  start_epoch=0, training_losses=None, validation_losses=None, checkpoint_prefix=None):
@@ -117,6 +83,72 @@ def plot_losses(training_losses, validation_losses, save_path):
     plt.savefig(save_path)
     plt.close()
 
+
+# ------------------- Config ------------------- #
+
+DATA_PATH = "/uscms/home/roguljic/nobackup/AnomalyTagging/el9/AutoencoderTraining/data/merged_qcd_train_scaled.h5"
+INPUT_DIM = 256
+SAVEDIR = "shallow"
+CHECKPOINT_PATH = f"{SAVEDIR}/wnae_checkpoint_{INPUT_DIM}.pth"
+PLOT_PATH = f"{SAVEDIR}/plots/training_loss_plot.png"
+
+BATCH_SIZE = 512
+NUM_SAMPLES = 2 ** 15
+LEARNING_RATE = 1e-3
+N_EPOCHS = 20
+
+WNAE_PARAMS = {
+    "sampling": "pcd",
+    "n_steps": 10,
+    "step_size": None,
+    "noise": 0.2,
+    "temperature": 0.05,
+    "bounds": (-3.,3.),
+    "mh": False,
+    "initial_distribution": "gaussian",
+    "replay": True,
+    "replay_ratio": 0.95,
+    "buffer_size": 10000,
+}
+DEVICE = torch.device("cpu")
+
+
+# ------------------- Model ------------------- #
+
+class Encoder(nn.Module):
+    def __init__(self, input_size):
+        super().__init__()
+        hidden_size = input_size*2
+        self.layer1 = nn.Linear(input_size, hidden_size)
+        self.layer2 = nn.Linear(hidden_size, hidden_size)
+        #self.layer3 = nn.Linear(hidden_size, hidden_size)
+        #self.layer4 = nn.Linear(hidden_size, hidden_size)
+        #self.layer5 = nn.Linear(hidden_size, hidden_size)
+
+    def forward(self, x):
+        x = torch.relu(self.layer1(x))
+        x = torch.relu(self.layer2(x))
+        #x = torch.relu(self.layer3(x))
+        #x = torch.relu(self.layer4(x))
+        #x = torch.relu(self.layer5(x))
+        return x
+
+class Decoder(nn.Module):
+    def __init__(self, output_size):
+        super().__init__()
+        hidden_size = output_size*2
+        self.layer1 = nn.Linear(hidden_size, hidden_size)
+        self.layer2 = nn.Linear(hidden_size, output_size)
+       # self.layer3 = nn.Linear(hidden_size, output_size)
+       # self.layer4 = nn.Linear(hidden_size, output_size)
+       # self.layer5 = nn.Linear(hidden_size, output_size)
+
+    def forward(self, x):
+        x = torch.relu(self.layer1(x))
+        return self.layer2(x)
+
+# ------------------- Main ------------------- #
+
 def main():
     dataset = JetDataset(DATA_PATH)
 
@@ -134,8 +166,8 @@ def main():
     val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, sampler=RandomSampler(val_dataset, replacement=True, num_samples=NUM_SAMPLES))
 
     model = WNAE(
-        encoder=model_config["encoder"](),
-        decoder=model_config["decoder"](),
+        encoder=Encoder(INPUT_DIM),
+        decoder=Decoder(INPUT_DIM),
         **WNAE_PARAMS
     ).to(DEVICE)
 
@@ -155,7 +187,6 @@ def main():
         training_losses = []
         validation_losses = []
 
-    os.makedirs(os.path.dirname(PLOT_PATH), exist_ok=True)
     # Train
     training_losses, validation_losses = run_training(
         model=model,
@@ -167,7 +198,7 @@ def main():
         start_epoch=start_epoch,
         training_losses=training_losses,
         validation_losses=validation_losses,
-        #checkpoint_prefix="training"
+        checkpoint_prefix="training"
     )
 
     # Plot

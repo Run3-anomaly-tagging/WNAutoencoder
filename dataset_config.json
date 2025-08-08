@@ -1,0 +1,22 @@
+{
+    "qcd_samples": {
+      "QCD_merged":{
+        "path":"/uscms_data/d3/roguljic/AnomalyTagging/el9/AutoencoderTraining/data/merged_qcd_train_scaled.h5"
+      }
+    },
+    "signal_samples": {
+      "GluGluHto2B": {
+        "path": "/uscms/home/roguljic/nobackup/AnomalyTagging/el9/AutoencoderTraining/data/GluGluHto2B_scaled.h5",
+        "xsec": 1.0
+      },
+      "SVJ": {
+        "path": "/uscms/home/roguljic/nobackup/AnomalyTagging/el9/AutoencoderTraining/data/svj_scaled.h5",
+        "xsec": 1.0
+      },
+      "TTto4Q":{
+        "path": "/uscms/home/roguljic/nobackup/AnomalyTagging/el9/AutoencoderTraining/data/TTto4Q_scaled.h5",
+        "xsec": 762
+      }        
+    }
+  }
+  
