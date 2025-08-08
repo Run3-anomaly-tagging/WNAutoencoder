@@ -1,186 +1,198 @@
-import torch
-import torch.nn as nn
+#!/usr/bin/env python
+# train_for_plots.py — WNAE training + fixed-binning plots (all features at last epoch)
+import os, random
 import numpy as np
-import matplotlib.pyplot as plt
+import torch
 from tqdm import tqdm
 from torch.utils.data import DataLoader, RandomSampler
+import matplotlib.pyplot as plt
+
 from utils.jet_dataset import JetDataset
 from wnae import WNAE
 from model_registry import MODEL_REGISTRY
-import os
 
 # ------------------- Config ------------------- #
+MODEL_NAME   = "deep"   # <- pick from your MODEL_REGISTRY
+DATA_PATH    = "/uscms/home/roguljic/nobackup/AnomalyTagging/el9/AutoencoderTraining/data/merged_qcd_train_scaled.h5"
 
-DATA_PATH = "/uscms/home/roguljic/nobackup/AnomalyTagging/el9/AutoencoderTraining/data/merged_qcd_train_scaled.h5"
-MODEL_NAME = "deep"
-model_config = MODEL_REGISTRY[MODEL_NAME]
+# training
+BATCH_SIZE   = 512
+NUM_SAMPLES  = 2 ** 15
+LR           = 1e-3
+N_EPOCHS     = 10
+DEVICE       = torch.device("cpu")
 
-INPUT_DIM = model_config["input_dim"]
-SAVEDIR = model_config["savedir"]
-CHECKPOINT_PATH = f"{SAVEDIR}/wnae_checkpoint_{INPUT_DIM}.pth"
-PLOT_PATH = f"{SAVEDIR}/plots/training_loss_plot.png"
+# plotting
+PLOT_EPOCHS  = [1, 3, 5, 10]  # final epoch is always added automatically
+BINS         = np.linspace(-5.0, 5.0, 101)  # 100 bins, range [-5,5]
+N_1D_SAMPLES = 6   # how many random features to plot for non-final epochs
+N_2D_SAMPLES = 2   # quick 2D scatters for sanity
+RNG_SEED     = 0
 
-BATCH_SIZE = 512
-NUM_SAMPLES = 2 ** 15
-LEARNING_RATE = 1e-3
-N_EPOCHS = 5
+# WNAE specifics
+WNAE_PARAMS = dict(
+    sampling="pcd", n_steps=10, step_size=None, noise=0.2, temperature=0.05,
+    bounds=(-3., 3.), mh=False, initial_distribution="gaussian",
+    replay=True, replay_ratio=0.95, buffer_size=10000,
+)
+# ------------------------------------------------
 
-WNAE_PARAMS = {
-    "sampling": "pcd",
-    "n_steps": 10,
-    "step_size": None,
-    "noise": 0.2,
-    "temperature": 0.05,
-    "bounds": (-3.,3.),
-    "mh": False,
-    "initial_distribution": "gaussian",
-    "replay": True,
-    "replay_ratio": 0.95,
-    "buffer_size": 10000,
-}
-DEVICE = torch.device("cpu")
-# -------------------  ------------------- #
+def ensure_dir(p):
+    os.makedirs(p, exist_ok=True)
+    return p
 
-def run_training(model, optimizer, loss_function, n_epochs, training_loader, validation_loader,
-                 start_epoch=0, training_losses=None, validation_losses=None, checkpoint_prefix=None):
-
-    training_losses = training_losses or []
-    validation_losses = validation_losses or []
-
-    for i_epoch in range(start_epoch, start_epoch + n_epochs):
-        model.train()
-        training_loss = 0
-        n_batches = 0
-
-        bar_format = f"Epoch {i_epoch+1}/{start_epoch + n_epochs}: " \
-                     + "{l_bar}{bar:10}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]"
-
-        for batch in tqdm(training_loader, bar_format=bar_format):
-            x = batch[0].to(DEVICE)
-            optimizer.zero_grad()
-
-            if loss_function == "wnae":
-                loss, train_dict = model.train_step(x)
-            elif loss_function == "nae":
-                loss, train_dict = model.train_step_nae(x)
-            elif loss_function == "ae":
-                loss, train_dict = model.train_step_ae(x, run_mcmc=True, mcmc_replay=True)
-
-            loss.backward()
-            optimizer.step()
-            training_loss += train_dict["loss"]
-            n_batches += 1
-
-        training_losses.append(training_loss / n_batches)
-
-        # Validation
-        model.eval()
-        validation_loss = 0
-        n_batches = 0
-
-        for batch in validation_loader:
-            x = batch[0].to(DEVICE)
-
-            if loss_function == "wnae":
-                val_dict = model.validation_step(x)
-            elif loss_function == "nae":
-                val_dict = model.validation_step_nae(x)
-            elif loss_function == "ae":
-                val_dict = model.validation_step_ae(x, run_mcmc=True)
-
-            validation_loss += val_dict["loss"]
-            n_batches += 1
-
-        validation_losses.append(validation_loss / n_batches)
-
-        # Save checkpoint after each epoch
-        if checkpoint_prefix:
-            torch.save({
-                "epoch": i_epoch + 1,
-                "model_state_dict": model.state_dict(),
-                "optimizer_state_dict": optimizer.state_dict(),
-                "training_losses": training_losses,
-                "validation_losses": validation_losses,
-            }, f"{SAVEDIR}/{checkpoint_prefix}_epoch{i_epoch + 1}.pth")
-
-    return training_losses, validation_losses
-
-def plot_losses(training_losses, validation_losses, save_path):
-    epochs = list(range(len(training_losses)))
+def plot_losses(tr, val, png_path):
+    ensure_dir(os.path.dirname(png_path))
+    epochs = list(range(len(tr)))
     plt.figure()
-    plt.plot(epochs, training_losses, label="Training", color="red", linewidth=2)
-    plt.plot(epochs, validation_losses, label="Validation", color="blue", linestyle="dashed", linewidth=2)
-    plt.xlabel("Epoch")
-    plt.ylabel("Loss")
+    plt.plot(epochs, tr,  label="Training",   linewidth=2)
+    plt.plot(epochs, val, label="Validation", linestyle="--", linewidth=2)
     plt.yscale("log")
-    plt.legend()
-    plt.savefig(save_path)
+    plt.xlabel("Epoch"); plt.ylabel("Loss"); plt.legend()
+    plt.tight_layout()
+    plt.savefig(png_path)
     plt.close()
 
+def plot_epoch_1d(data, mcmc, outdir, epoch, features, bins):
+    ensure_dir(outdir)
+    for feat in features:
+        plt.hist(data[:, feat], bins=bins, histtype='step', density=True, label='data')
+        plt.hist(mcmc[:, feat], bins=bins, histtype='step', density=True, label='MCMC')
+        plt.legend()
+        plt.title(f'Epoch {epoch} — feat {feat}')
+        plt.tight_layout()
+        plt.savefig(os.path.join(outdir, f'epoch{epoch}_feat{feat}.png'))
+        plt.close()
+
+def plot_epoch_2d(data, mcmc, outdir, epoch, rng, n_pairs=2, xlim=(-5,5), ylim=(-5,5)):
+    ensure_dir(outdir)
+    d = data.shape[1]
+    for _ in range(min(n_pairs, max(0, d // 2))):
+        x, y = rng.sample(range(d), 2)
+        plt.scatter(data[:, x], data[:, y], s=2, alpha=.3, label='data')
+        plt.scatter(mcmc[:, x], mcmc[:, y], s=2, alpha=.3, label='MCMC')
+        plt.xlim(*xlim); plt.ylim(*ylim)
+        plt.legend()
+        plt.title(f'Epoch {epoch} — (feat {x}, feat {y})')
+        plt.tight_layout()
+        plt.savefig(os.path.join(outdir, f'epoch{epoch}_2d_{x}_{y}.png'))
+        plt.close()
+
 def main():
-    dataset = JetDataset(DATA_PATH)
+    # registry-driven
+    cfg       = MODEL_REGISTRY[MODEL_NAME]
+    INPUT_DIM = cfg["input_dim"]
+    SAVEDIR   = ensure_dir(cfg["savedir"])
+    PLOTDIR   = ensure_dir(os.path.join(SAVEDIR, "plots"))
+    LOSS_PNG  = os.path.join(PLOTDIR, "training_loss_plot.png")
+    CKPT_PATH = os.path.join(SAVEDIR, f"wnae_checkpoint_{INPUT_DIM}.pth")
 
-    # Split
-    indices = np.arange(len(dataset))
-    np.random.seed(0)
-    np.random.shuffle(indices)
-    split = int(0.8 * len(indices))
-    train_idx, val_idx = indices[:split], indices[split:]
+    # seeds
+    np.random.seed(RNG_SEED); random.seed(RNG_SEED); torch.manual_seed(RNG_SEED)
 
-    train_dataset = JetDataset(DATA_PATH, indices=train_idx, input_dim=INPUT_DIM)
-    val_dataset = JetDataset(DATA_PATH, indices=val_idx, input_dim=INPUT_DIM)
+    # datasets/loaders
+    ds_full = JetDataset(DATA_PATH)
+    idx     = np.random.permutation(len(ds_full))
+    split   = int(0.8 * len(idx))
+    ds_tr   = JetDataset(DATA_PATH, indices=idx[:split],  input_dim=INPUT_DIM)
+    ds_val  = JetDataset(DATA_PATH, indices=idx[split:], input_dim=INPUT_DIM)
 
-    train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, sampler=RandomSampler(train_dataset, replacement=True, num_samples=NUM_SAMPLES))
-    val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, sampler=RandomSampler(val_dataset, replacement=True, num_samples=NUM_SAMPLES))
+    tr_loader = DataLoader(ds_tr,  batch_size=BATCH_SIZE,
+                           sampler=RandomSampler(ds_tr,  replacement=True, num_samples=NUM_SAMPLES))
+    va_loader = DataLoader(ds_val, batch_size=BATCH_SIZE,
+                           sampler=RandomSampler(ds_val, replacement=True, num_samples=NUM_SAMPLES))
 
-    model = WNAE(
-        encoder=model_config["encoder"](),
-        decoder=model_config["decoder"](),
-        **WNAE_PARAMS
-    ).to(DEVICE)
+    # model/optim
+    model = WNAE(encoder=cfg["encoder"](), decoder=cfg["decoder"](), **WNAE_PARAMS).to(DEVICE)
+    optim = torch.optim.AdamW(model.parameters(), lr=LR)
 
-    optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE)
+    # maybe resume
+    start_epoch, tr_losses, val_losses = 0, [], []
+    if os.path.exists(CKPT_PATH):
+        ckpt = torch.load(CKPT_PATH, map_location=DEVICE)
+        try:
+            model.load_state_dict(ckpt["model_state_dict"])
+        except Exception as e:
+            print(f"[info] model strict load failed: {e}; retrying strict=False")
+            model.load_state_dict(ckpt["model_state_dict"], strict=False)
+        try:
+            optim.load_state_dict(ckpt["optimizer_state_dict"])
+        except Exception as e:
+            print(f"[warn] optimizer state not loaded: {e}")
+        start_epoch = int(ckpt.get("epoch", 0))
+        tr_losses   = list(ckpt.get("training_losses", []))
+        val_losses  = list(ckpt.get("validation_losses", []))
+        print(f"Resumed from epoch {start_epoch}")
 
-    try:
-        checkpoint = torch.load(CHECKPOINT_PATH, map_location=DEVICE)
-        model.load_state_dict(checkpoint["model_state_dict"])
-        optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
-        start_epoch = checkpoint["epoch"]
-        training_losses = checkpoint["training_losses"]
-        validation_losses = checkpoint["validation_losses"]
-        print(f"Loaded checkpoint from epoch {start_epoch}")
-    except FileNotFoundError:
-        print(f"No checkpoint found at {CHECKPOINT_PATH}. Starting training from scratch.")
-        start_epoch = 0
-        training_losses = []
-        validation_losses = []
+    # ensure final epoch gets plotted (for ALL features)
+    final_epoch_index = start_epoch + N_EPOCHS - 1
+    plot_epochs = set(PLOT_EPOCHS)
+    plot_epochs.add(final_epoch_index)
+    rng = random.Random(RNG_SEED)
 
-    os.makedirs(os.path.dirname(PLOT_PATH), exist_ok=True)
-    # Train
-    training_losses, validation_losses = run_training(
-        model=model,
-        optimizer=optimizer,
-        loss_function="wnae",
-        n_epochs=N_EPOCHS,
-        training_loader=train_loader,
-        validation_loader=val_loader,
-        start_epoch=start_epoch,
-        training_losses=training_losses,
-        validation_losses=validation_losses,
-        #checkpoint_prefix="training"
-    )
+    # --- training loop with validation + snapshots ---
+    for epoch in range(start_epoch, start_epoch + N_EPOCHS):
+        # train
+        model.train()
+        tot_tr, n_tr = 0.0, 0
+        bar = f"Epoch {epoch+1}/{start_epoch + N_EPOCHS}: " + "{l_bar}{bar:10}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]"
+        for batch in tqdm(tr_loader, bar_format=bar):
+            x = batch[0].to(DEVICE)
+            optim.zero_grad()
+            loss, out = model.train_step(x)   # WNAE
+            loss.backward()
+            optim.step()
+            tot_tr += float(out["loss"]); n_tr += 1
+        tr_losses.append(tot_tr / max(1, n_tr))
 
-    # Plot
-    plot_losses(training_losses, validation_losses, PLOT_PATH)
+        # validate + maybe snapshot (NO torch.no_grad(): MCMC needs autograd on x)
+        model.eval()
+        tot_va, n_va = 0.0, 0
+        snapshot_done = False
+        for i, batch in enumerate(va_loader):
+            x = batch[0].to(DEVICE)
+            # allow autograd so Langevin sampler can compute ∂E/∂x
+            vdict = model.validation_step(x)
+            tot_va += float(vdict["loss"]); n_va += 1
 
-    # Save checkpoint
+            # For epochs we want to plot, grab the first val batch’s data+mcmc
+            if (epoch in plot_epochs) and (i == 0) and (not snapshot_done):
+                try:
+                    mcmc = vdict["mcmc_data"]["samples"][-1].detach().cpu().numpy()
+                    data = x.detach().cpu().numpy()
+                    ep_dir = ensure_dir(os.path.join(PLOTDIR, f"epoch_{epoch}"))
+
+                    nfeat = data.shape[1]
+                    if epoch == final_epoch_index:
+                        features = range(nfeat)  # plot ALL features at final epoch
+                    else:
+                        sel = min(N_1D_SAMPLES, nfeat)
+                        features = rng.sample(range(nfeat), sel)
+
+                    # 1D fixed-binning histograms
+                    plot_epoch_1d(data, mcmc, ep_dir, epoch, features, BINS)
+                    # a couple of 2D scatters for shape sanity
+                    plot_epoch_2d(data, mcmc, ep_dir, epoch, rng, n_pairs=N_2D_SAMPLES,
+                                  xlim=(BINS[0], BINS[-1]), ylim=(BINS[0], BINS[-1]))
+                    snapshot_done = True
+                except Exception as e:
+                    print(f"[warn] epoch {epoch}: could not snapshot MCMC/data: {e}")
+
+        val_losses.append(tot_va / max(1, n_va))
+
+    # save loss plot + checkpoint
+    plot_losses(tr_losses, val_losses, LOSS_PNG)
     torch.save({
         "epoch": start_epoch + N_EPOCHS,
         "model_state_dict": model.state_dict(),
-        "optimizer_state_dict": optimizer.state_dict(),
-        "training_losses": training_losses,
-        "validation_losses": validation_losses,
-    }, CHECKPOINT_PATH)
+        "optimizer_state_dict": optim.state_dict(),
+        "training_losses": tr_losses,
+        "validation_losses": val_losses,
+    }, CKPT_PATH)
+
+    print(f"Saved checkpoint: {CKPT_PATH}")
+    print(f"Loss plot      : {LOSS_PNG}")
+    print(f"Per-epoch plots: {PLOTDIR}")
 
 if __name__ == "__main__":
     main()
