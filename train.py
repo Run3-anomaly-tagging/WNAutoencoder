@@ -7,8 +7,9 @@ from torch.utils.data import DataLoader, RandomSampler
 from utils.jet_dataset import JetDataset
 from wnae import WNAE
 from model_registry import MODEL_REGISTRY
-import os
-
+import os, random
+from utils.plotting_helpers import ensure_dir, plot_epoch_1d, plot_epoch_2d
+import itertools
 # ------------------- Config ------------------- #
 
 DATA_PATH = "/uscms/home/roguljic/nobackup/AnomalyTagging/el9/AutoencoderTraining/data/merged_qcd_train_scaled.h5"
@@ -18,12 +19,19 @@ model_config = MODEL_REGISTRY[MODEL_NAME]
 INPUT_DIM = model_config["input_dim"]
 SAVEDIR = model_config["savedir"]
 CHECKPOINT_PATH = f"{SAVEDIR}/wnae_checkpoint_{INPUT_DIM}.pth"
-PLOT_PATH = f"{SAVEDIR}/plots/training_loss_plot.png"
-
-BATCH_SIZE = 512
+PLOT_DIR = f"{SAVEDIR}/plots/"
+BATCH_SIZE = 1024
 NUM_SAMPLES = 2 ** 15
 LEARNING_RATE = 1e-3
-N_EPOCHS = 5
+N_EPOCHS = 20
+
+#For plotting
+PLOT_DISTRIBUTIONS = True
+PLOT_EPOCHS  = [1, 2, 5, 10]  # Final epoch is always added automatically
+BINS         = np.linspace(-5.0, 5.0, 101)
+N_1D_SAMPLES = 10   # how many random features to plot for non-final epochs
+N_2D_SAMPLES = 5    # how many 2D scatter plots to print
+RNG_SEED     = 0
 
 WNAE_PARAMS = {
     "sampling": "pcd",
@@ -31,7 +39,7 @@ WNAE_PARAMS = {
     "step_size": None,
     "noise": 0.2,
     "temperature": 0.05,
-    "bounds": (-3.,3.),
+    "bounds": (-4.,4.),
     "mh": False,
     "initial_distribution": "gaussian",
     "replay": True,
@@ -46,7 +54,6 @@ def run_training(model, optimizer, loss_function, n_epochs, training_loader, val
 
     training_losses = training_losses or []
     validation_losses = validation_losses or []
-
     for i_epoch in range(start_epoch, start_epoch + n_epochs):
         model.train()
         training_loss = 0
@@ -87,8 +94,26 @@ def run_training(model, optimizer, loss_function, n_epochs, training_loader, val
                 val_dict = model.validation_step_nae(x)
             elif loss_function == "ae":
                 val_dict = model.validation_step_ae(x, run_mcmc=True)
-
             validation_loss += val_dict["loss"]
+
+            if(n_batches==0 and PLOT_DISTRIBUTIONS==True):
+                #Plotting features, positive and negative samples, only for first batch
+                mcmc = val_dict["mcmc_data"]["samples"][-1].detach().cpu().numpy()
+                data = x.detach().cpu().numpy()
+                ep_dir = ensure_dir(os.path.join(PLOT_DIR, f"epoch_{i_epoch+1}"))
+
+                nfeat = data.shape[1]
+                if ((i_epoch +1) == (start_epoch + n_epochs)):
+                    features = range(nfeat)  #plot all features at final epoch
+                else:
+                    features = random.Random(RNG_SEED).sample(range(nfeat), N_1D_SAMPLES)
+                
+                pairs = random.Random(RNG_SEED).sample(list(itertools.combinations(range(nfeat), 2)),N_2D_SAMPLES)#N_2D_SAMPLES pairs of features to plot
+                # 1D fixed-binning histograms
+                plot_epoch_1d(data, mcmc, ep_dir, i_epoch+1, features, BINS)
+                # a couple of 2D scatters for shape sanity, fix that later
+                plot_epoch_2d(data, mcmc, ep_dir, i_epoch+1, pairs, BINS)
+            
             n_batches += 1
 
         validation_losses.append(validation_loss / n_batches)
@@ -105,8 +130,10 @@ def run_training(model, optimizer, loss_function, n_epochs, training_loader, val
 
     return training_losses, validation_losses
 
-def plot_losses(training_losses, validation_losses, save_path):
+def plot_losses(training_losses, validation_losses, save_dir):
     epochs = list(range(len(training_losses)))
+    ensure_dir(save_dir)
+    save_path = os.path.join(save_dir, "training_loss_plot.png")
     plt.figure()
     plt.plot(epochs, training_losses, label="Training", color="red", linewidth=2)
     plt.plot(epochs, validation_losses, label="Validation", color="blue", linestyle="dashed", linewidth=2)
@@ -155,7 +182,6 @@ def main():
         training_losses = []
         validation_losses = []
 
-    os.makedirs(os.path.dirname(PLOT_PATH), exist_ok=True)
     # Train
     training_losses, validation_losses = run_training(
         model=model,
@@ -171,7 +197,7 @@ def main():
     )
 
     # Plot
-    plot_losses(training_losses, validation_losses, PLOT_PATH)
+    plot_losses(training_losses, validation_losses, PLOT_DIR)
 
     # Save checkpoint
     torch.save({
