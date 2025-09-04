@@ -4,3 +4,5 @@ __pycache__
 wnae_root
 feature_histograms
 scaled_feature_histograms
+deep
+shallow
