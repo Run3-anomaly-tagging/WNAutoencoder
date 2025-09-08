@@ -103,11 +103,12 @@ def scale_and_save(input_fp, output_fp, batch_size=1000):
                 batch_scaled = np.empty(batch.shape, dtype=dtype)
                 for name in dtype.names:
                     if name == 'hidNeurons':
-                        # Scale hidNeurons only
                         batch_scaled[name] = (batch[name] - means) / stds
-                    else:
-                        #Won't save jet images
-                        continue
+                    elif (name =="pt" or name=="mass"):
+                        batch_scaled[name] = batch[name]
+                    else: #Skip jet images, phi, and eta
+                        continue 
+
                 
                 jets_out[start:end] = batch_scaled
 
@@ -164,8 +165,14 @@ def apply_scaling_and_save(input_fp, output_fp, mean, std, keys=("Jets_Bkg", "Je
                 batch = jets_in[start:end]
 
                 batch_scaled = np.empty(batch.shape, dtype=dtype)
-                name = "hidNeurons"
-                batch_scaled[name] = (batch[name] - mean) / std
+
+                for name in dtype.names:
+                    if name == "hidNeurons":
+                        batch_scaled[name] = (batch[name] - mean) / std
+                    elif name in ("pt", "mass"):
+                        batch_scaled[name] = batch[name]
+                    else:
+                        continue  # skip other fields
                 jets_out[start:end] = batch_scaled
 
     print(f"[INFO] Scaling complete. Scaled datasets saved to: {output_fp}")
@@ -178,7 +185,7 @@ if __name__ == "__main__":
     sample_size = 20000  # for computing mean/std
 
     # Uncomment to perform scaling of training data (QCD jets) and save scaled output and saling parameters.
-    #scale_and_save(input_filepath, output_filepath, batch_size=batch_size)
+    scale_and_save(input_filepath, output_filepath, batch_size=batch_size)
     # Uncomment to run a sanity check on the scaled features by printing stats and saving histograms.
     #sanity_check_scaled_features(output_filepath)
 

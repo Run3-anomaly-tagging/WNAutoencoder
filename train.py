@@ -96,7 +96,7 @@ def run_training(model, optimizer, loss_function, n_epochs, training_loader, val
                 val_dict = model.validation_step_ae(x, run_mcmc=True)
             validation_loss += val_dict["loss"]
 
-            if(n_batches==0 and PLOT_DISTRIBUTIONS==True):
+            if(n_batches==0 and PLOT_DISTRIBUTIONS==True and (i_epoch+1 in PLOT_EPOCHS)):
                 #Plotting features, positive and negative samples, only for first batch
                 mcmc = val_dict["mcmc_data"]["samples"][-1].detach().cpu().numpy()
                 data = x.detach().cpu().numpy()

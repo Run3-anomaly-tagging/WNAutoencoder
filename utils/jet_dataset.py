@@ -3,18 +3,29 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 from utils.h5_helpers import extract_hidden_features
-
 class JetDataset(Dataset):
-    def __init__(self, filepath, indices=None, input_dim=None, key="Jets", mean=None, std=None):
+    def __init__(self, filepath, indices=None, input_dim=None, key="Jets",
+                 mean=None, std=None, pt_cut=None):
         self.file = h5py.File(filepath, 'r')
         self.jets = self.file[key]
 
+        self.pt = self.jets['pt'][:]
+        self.mass = self.jets['mass'][:]
+
         self.total_len = len(self.jets)
+
+        # Apply pt cut if requested
+        if pt_cut is not None:
+            selected = np.where(self.pt > pt_cut)[0]
+            if indices is not None:
+                indices = np.intersect1d(indices, selected, assume_unique=True)
+            else:
+                indices = selected
+
         self.indices = np.arange(self.total_len) if indices is None else np.array(indices)
 
-        self.input_dim = input_dim  # max features to return, None means all
-        
-        # Store mean and std as torch tensors for rescaling if given
+        self.input_dim = input_dim
+
         if mean is not None and std is not None:
             self.mean = torch.tensor(mean, dtype=torch.float32)
             self.std = torch.tensor(std, dtype=torch.float32)
@@ -34,11 +45,16 @@ class JetDataset(Dataset):
 
         features_tensor = torch.tensor(features)
 
-        # Rescale features if mean/std are provided
         if self.mean is not None and self.std is not None:
             features_tensor = (features_tensor - self.mean[:len(features_tensor)]) / self.std[:len(features_tensor)]
 
-        return features_tensor, features_tensor  # x == y for autoencoder
+        return features_tensor, features_tensor
+
+    def get_pt(self):
+        return self.pt[self.indices]
+
+    def get_mass(self):
+        return self.mass[self.indices]
 
     def close(self):
         self.file.close()
