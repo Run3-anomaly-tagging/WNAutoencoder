@@ -5,7 +5,7 @@ import torch
 import matplotlib.pyplot as plt
 from sklearn.metrics import roc_curve, auc
 from torch.utils.data import DataLoader, SequentialSampler
-
+from matplotlib.transforms import Bbox
 from utils.jet_dataset import JetDataset
 from wnae import WNAE
 from model_registry import MODEL_REGISTRY
@@ -20,6 +20,10 @@ SAVEDIR = model_config["savedir"]
 CHECKPOINT_PATH = f"{SAVEDIR}/wnae_checkpoint_{INPUT_DIM}.pth"
 MAX_JETS = 10000
 DEVICE = torch.device("cpu")
+
+#Plotting options
+PT_CUT = 300
+BKG_NAME = "QCD"
 
 WNAE_PARAMS = {
     "sampling": "pcd",
@@ -40,19 +44,23 @@ os.makedirs(f"{SAVEDIR}/plots", exist_ok=True)
 with open(CONFIG_PATH, "r") as f:
     config = json.load(f)
 
-def load_dataset(file_path, key="Jets", max_jets=10000):
-    dataset = JetDataset(file_path, input_dim=INPUT_DIM, key=key)
-    indices = np.random.choice(len(dataset), size=min(len(dataset), max_jets), replace=False)
-    return JetDataset(file_path, input_dim=INPUT_DIM, indices=indices)
+def load_dataset(file_path, key="Jets", max_jets=10000, pt_cut=None):
+    tmp_ds = JetDataset(file_path, input_dim=INPUT_DIM, key=key, pt_cut=pt_cut)
+    # Sample random indices from the already cut dataset
+    if len(tmp_ds) > max_jets:
+        sampled = np.random.choice(tmp_ds.indices, size=max_jets, replace=False)
+        tmp_ds.indices = sampled
+    return tmp_ds
 
-
-bkg_path = config["qcd_samples"]["QCD_merged"]["path"]
-bkg_dataset = load_dataset(bkg_path, max_jets=MAX_JETS)
+bkg_path = config[BKG_NAME]["path"]
+bkg_dataset = load_dataset(bkg_path, max_jets=MAX_JETS,pt_cut=PT_CUT)
 bkg_loader = DataLoader(bkg_dataset, batch_size=BATCH_SIZE, sampler=SequentialSampler(bkg_dataset))
 
 signal_loaders = {}
-for name, sample in config["signal_samples"].items():
-    sig_dataset = load_dataset(sample["path"], max_jets=MAX_JETS)
+for name, sample in config.items():
+    if name==BKG_NAME:
+        continue
+    sig_dataset = load_dataset(sample["path"], max_jets=MAX_JETS,pt_cut=PT_CUT)
     signal_loaders[name] = DataLoader(sig_dataset, batch_size=BATCH_SIZE, sampler=SequentialSampler(sig_dataset))
 
 model = WNAE(encoder=model_config["encoder"](),decoder=model_config["decoder"](),**WNAE_PARAMS)
@@ -135,7 +143,9 @@ plt.savefig(savefig, dpi=200)
 plt.close()
 print(f"Saved {savefig}")
 
-# --- Also save individual subplots ---
+
+# --- Save each subplot individually ---
+#Thank you SO: https://stackoverflow.com/questions/4325733/save-a-subplot-in-matplotlib
 individual_plots = {
     "loss": ax_loss,
     "roc": ax_roc,
@@ -143,23 +153,29 @@ individual_plots = {
     "pt": ax_pt,
 }
 
+expand_left_frac = 0.12 
+expand_right_frac = 0.05
+expand_bottom_frac = 0.11
+expand_top_frac = 0.01
+
+
 for name, ax in individual_plots.items():
-    fig_ind = plt.figure()
-    new_ax = fig_ind.add_subplot(111)
-    for artist in ax.get_children():
-        try:
-            new_ax.add_artist(artist)
-        except Exception:
-            pass
-    new_ax.set_xlim(ax.get_xlim())
-    new_ax.set_ylim(ax.get_ylim())
-    new_ax.set_xlabel(ax.get_xlabel())
-    new_ax.set_ylabel(ax.get_ylabel())
-    new_ax.legend(*ax.get_legend_handles_labels())
-    new_ax.grid(True, alpha=0.3)
+    fig = ax.figure
+    extent = ax.get_window_extent().transformed(fig.dpi_scale_trans.inverted())
+    # Slightly expand to avoid clipping labels, legends, ticks
+    width = extent.width
+    height = extent.height
+    
+
+    new_extent = Bbox.from_bounds(
+        extent.x0 - width * expand_left_frac,
+        extent.y0 - height * expand_bottom_frac,
+        width + width * (expand_left_frac + expand_right_frac),
+        height + height * (expand_bottom_frac + expand_top_frac)
+    )
+    # Save
     savefig = f"{SAVEDIR}/plots/{name}.png"
-    plt.savefig(savefig, dpi=200)
-    plt.close(fig_ind)
+    fig.savefig(savefig, dpi=200, bbox_inches=new_extent)
     print(f"Saved {savefig}")
 
 print("[INFO] Evaluation complete.")
