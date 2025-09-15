@@ -13,7 +13,7 @@ from model_registry import MODEL_REGISTRY
 # --- Configuration ---
 CONFIG_PATH = "dataset_config.json"
 BATCH_SIZE = 512
-MODEL_NAME = "deep"
+MODEL_NAME = "deep_ttbar"
 model_config = MODEL_REGISTRY[MODEL_NAME]
 INPUT_DIM = model_config["input_dim"]
 SAVEDIR = model_config["savedir"]

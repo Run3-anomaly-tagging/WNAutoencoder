@@ -68,12 +68,21 @@ MODEL_REGISTRY = {
         "input_dim": 256,
         "encoder": lambda: ShallowEncoder(256),
         "decoder": lambda: ShallowDecoder(256),
-        "savedir": "shallow"
+        "savedir": "shallow",
+        "process":"QCD"
     },
     "deep": {
         "input_dim": 256,
         "encoder": lambda: DeepEncoder(256),
         "decoder": lambda: DeepDecoder(256),
-        "savedir": "deep"
-    }
+        "savedir": "deep",
+        "process":"QCD"
+    },
+    "deep_ttbar": {
+        "input_dim": 256,
+        "encoder": lambda: DeepEncoder(256),
+        "decoder": lambda: DeepDecoder(256),
+        "savedir": "deep_ttbar",
+        "process":"TTto4Q"
+    },
 }
