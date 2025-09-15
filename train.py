@@ -10,24 +10,25 @@ from model_registry import MODEL_REGISTRY
 import os, random
 from utils.plotting_helpers import ensure_dir, plot_epoch_1d, plot_epoch_2d
 import itertools
+import json
 # ------------------- Config ------------------- #
 
-DATA_PATH = "/uscms/home/roguljic/nobackup/AnomalyTagging/el9/AutoencoderTraining/data/merged_qcd_train_scaled.h5"
-MODEL_NAME = "deep"
+MODEL_NAME = "deep_ttbar"
 model_config = MODEL_REGISTRY[MODEL_NAME]
 
+DATA_PATH = json.load(open("dataset_config.json"))[model_config["process"]]["path"]
 INPUT_DIM = model_config["input_dim"]
 SAVEDIR = model_config["savedir"]
 CHECKPOINT_PATH = f"{SAVEDIR}/wnae_checkpoint_{INPUT_DIM}.pth"
 PLOT_DIR = f"{SAVEDIR}/plots/"
-BATCH_SIZE = 1024
-NUM_SAMPLES = 2 ** 15
+BATCH_SIZE = 4096
+NUM_SAMPLES = 2 ** 16
 LEARNING_RATE = 1e-3
-N_EPOCHS = 20
+N_EPOCHS = 150
 
 #For plotting
 PLOT_DISTRIBUTIONS = True
-PLOT_EPOCHS  = [1, 2, 5, 10]  # Final epoch is always added automatically
+PLOT_EPOCHS  = [50]  # Final epoch is always added automatically
 BINS         = np.linspace(-5.0, 5.0, 101)
 N_1D_SAMPLES = 10   # how many random features to plot for non-final epochs
 N_2D_SAMPLES = 5    # how many 2D scatter plots to print
