@@ -6,3 +6,4 @@ feature_histograms
 scaled_feature_histograms
 deep
 shallow
+feat*_enc*

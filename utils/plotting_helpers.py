@@ -14,7 +14,7 @@ def plot_losses(training_losses, validation_losses, png_path):
     plt.yscale("log")
     plt.xlabel("Epoch"); plt.ylabel("Loss"); plt.legend()
     plt.tight_layout()
-    plt.savefig(png_path)
+    plt.savefig(png_path,dpi=200)
     plt.close()
 
 def plot_epoch_1d(data, mcmc, outdir, epoch, features, bins):
@@ -24,22 +24,26 @@ def plot_epoch_1d(data, mcmc, outdir, epoch, features, bins):
         plt.hist(mcmc[:, feat], bins=bins, histtype='step', density=True, label='MCMC')
         plt.legend()
         plt.title(f'Epoch {epoch} — feat {feat}')
+        plt.xlim(-4.,4.)
+        plt.ylim(0.,1.2)
         plt.tight_layout()
-        plt.savefig(os.path.join(outdir, f'epoch{epoch}_feat{feat}.png'))
+        plt.savefig(os.path.join(outdir, f'epoch{epoch}_feat{feat}.png'),dpi=200)
+        plt.savefig(os.path.join(outdir, f'epoch{epoch}_feat{feat}.pdf'))
         plt.close()
 
-def plot_epoch_2d(data, mcmc, outdir, epoch, pairs, bins):
+def plot_epoch_2d(data, mcmc, outdir, epoch, pairs):
     ensure_dir(outdir)
     for pair in pairs:
         x = pair[0]
         y = pair[1]
-        plt.scatter(data[:, x], data[:, y], s=2, alpha=.3, label='data')
-        plt.scatter(mcmc[:, x], mcmc[:, y], s=2, alpha=.3, label='MCMC')
-        plt.xlim(min(bins),max(bins))
-        plt.ylim(min(bins),max(bins))
+        plt.scatter(data[:, x], data[:, y], alpha=.2, label='Data')
+        plt.scatter(mcmc[:, x], mcmc[:, y], alpha=.2, label='MCMC')
+        plt.xlim(-4.,4.)
+        plt.ylim(-4.,4.)
         plt.legend()
         plt.title(f'Epoch {epoch} — (feat {x}, feat {y})')
         plt.tight_layout()
-        plt.savefig(os.path.join(outdir, f'epoch{epoch}_2d_{x}_{y}.png'))
+        plt.savefig(os.path.join(outdir, f'epoch{epoch}_2d_{x}_{y}.png'),dpi=200)
+        plt.savefig(os.path.join(outdir, f'epoch{epoch}_2d_{x}_{y}.pdf'))
         plt.close()
 

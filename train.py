@@ -13,25 +13,26 @@ import itertools
 import json
 # ------------------- Config ------------------- #
 
-MODEL_NAME = "deep_ttbar"
+MODEL_NAME = "feat16_encoder64_deep_qcd"
 model_config = MODEL_REGISTRY[MODEL_NAME]
 
 DATA_PATH = json.load(open("dataset_config.json"))[model_config["process"]]["path"]
+#DATA_PATH = json.load(open("dataset_config_alt.json"))[model_config["process"]]["path"]
 INPUT_DIM = model_config["input_dim"]
 SAVEDIR = model_config["savedir"]
 CHECKPOINT_PATH = f"{SAVEDIR}/wnae_checkpoint_{INPUT_DIM}.pth"
 PLOT_DIR = f"{SAVEDIR}/plots/"
-BATCH_SIZE = 4096
-NUM_SAMPLES = 2 ** 16
+BATCH_SIZE = 1024
+NUM_SAMPLES = 2 ** 14
 LEARNING_RATE = 1e-3
-N_EPOCHS = 150
+N_EPOCHS = 100
 
 #For plotting
 PLOT_DISTRIBUTIONS = True
-PLOT_EPOCHS  = [50]  # Final epoch is always added automatically
+PLOT_EPOCHS  = [1,10,20,50,100]  # Final epoch is always added automatically
 BINS         = np.linspace(-5.0, 5.0, 101)
 N_1D_SAMPLES = 10   # how many random features to plot for non-final epochs
-N_2D_SAMPLES = 5    # how many 2D scatter plots to print
+N_2D_SAMPLES = 3    # how many 2D scatter plots to print
 RNG_SEED     = 0
 
 WNAE_PARAMS = {
@@ -50,8 +51,7 @@ WNAE_PARAMS = {
 DEVICE = torch.device("cpu")
 # -------------------  ------------------- #
 
-def run_training(model, optimizer, loss_function, n_epochs, training_loader, validation_loader,
-                 start_epoch=0, training_losses=None, validation_losses=None, checkpoint_prefix=None):
+def run_training(model, optimizer, loss_function, n_epochs, training_loader, validation_loader,start_epoch=0, training_losses=None, validation_losses=None, checkpoint_prefix=None):
 
     training_losses = training_losses or []
     validation_losses = validation_losses or []
@@ -112,12 +112,14 @@ def run_training(model, optimizer, loss_function, n_epochs, training_loader, val
                 pairs = random.Random(RNG_SEED).sample(list(itertools.combinations(range(nfeat), 2)),N_2D_SAMPLES)#N_2D_SAMPLES pairs of features to plot
                 # 1D fixed-binning histograms
                 plot_epoch_1d(data, mcmc, ep_dir, i_epoch+1, features, BINS)
-                # a couple of 2D scatters for shape sanity, fix that later
-                plot_epoch_2d(data, mcmc, ep_dir, i_epoch+1, pairs, BINS)
+                # a couple of 2D scatters for shape sanity
+                plot_epoch_2d(data, mcmc, ep_dir, i_epoch+1, pairs)
             
             n_batches += 1
 
         validation_losses.append(validation_loss / n_batches)
+
+        print(f"Epoch {i_epoch+1}/{start_epoch + n_epochs} | Train Loss: {training_losses[-1]:.4f} | Val Loss: {validation_losses[-1]:.4f}")
 
         # Save checkpoint after each epoch
         if checkpoint_prefix:
@@ -177,6 +179,11 @@ def main():
         training_losses = checkpoint["training_losses"]
         validation_losses = checkpoint["validation_losses"]
         print(f"Loaded checkpoint from epoch {start_epoch}")
+        print(model.buffer)
+        print(model.buffer.__len__())
+        print(optimizer.state_dict)
+        print(checkpoint["optimizer_state_dict"]["param_groups"])
+        exit()#For testing
     except FileNotFoundError:
         print(f"No checkpoint found at {CHECKPOINT_PATH}. Starting training from scratch.")
         start_epoch = 0

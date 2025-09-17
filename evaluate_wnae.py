@@ -13,7 +13,7 @@ from model_registry import MODEL_REGISTRY
 # --- Configuration ---
 CONFIG_PATH = "dataset_config.json"
 BATCH_SIZE = 512
-MODEL_NAME = "deep_ttbar"
+MODEL_NAME = "feat16_encoder64_deep_qcd"
 model_config = MODEL_REGISTRY[MODEL_NAME]
 INPUT_DIM = model_config["input_dim"]
 SAVEDIR = model_config["savedir"]
@@ -22,8 +22,9 @@ MAX_JETS = 10000
 DEVICE = torch.device("cpu")
 
 #Plotting options
-PT_CUT = 300
-BKG_NAME = "QCD"
+#PT_CUT = 300
+PT_CUT = None
+BKG_NAME = model_config["process"]
 
 WNAE_PARAMS = {
     "sampling": "pcd",
@@ -90,7 +91,7 @@ fig, axes = plt.subplots(2, 2, figsize=(14, 10))
 # --- 1) Loss distributions ---
 ax_loss = axes[0, 0]
 bins_loss = np.linspace(0, 500, 101)
-ax_loss.hist(bkg_losses, bins=bins_loss, histtype='step', label="QCD", density=True)
+ax_loss.hist(bkg_losses, bins=bins_loss, histtype='step', label=BKG_NAME, density=True)
 for name, losses in sig_losses_dict.items():
     ax_loss.hist(losses, bins=bins_loss, histtype='step', label=name, density=True)
 ax_loss.set_xlabel("Reconstruction MSE")
@@ -116,7 +117,7 @@ ax_roc.grid(True, alpha=0.3)
 # --- 3) Jet mass distributions ---
 ax_mass = axes[1, 0]
 bins_mass = np.linspace(0, 200, 101)
-ax_mass.hist(bkg_dataset.get_mass(), bins=bins_mass, histtype='step', density=True, label="QCD")
+ax_mass.hist(bkg_dataset.get_mass(), bins=bins_mass, histtype='step', density=True, label=BKG_NAME)
 for name, loader in signal_loaders.items():
     sig_ds = loader.dataset
     ax_mass.hist(sig_ds.get_mass(), bins=bins_mass, histtype='step', density=True, label=name)
@@ -127,7 +128,7 @@ ax_mass.legend()
 # --- 4) Jet pt distributions ---
 ax_pt = axes[1, 1]
 bins_pt = np.linspace(150, 800, 65)
-ax_pt.hist(bkg_dataset.get_pt(), bins=bins_pt, histtype='step', density=True, label="QCD")
+ax_pt.hist(bkg_dataset.get_pt(), bins=bins_pt, histtype='step', density=True, label=BKG_NAME)
 for name, loader in signal_loaders.items():
     sig_ds = loader.dataset
     ax_pt.hist(sig_ds.get_pt(), bins=bins_pt, histtype='step', density=True, label=name)

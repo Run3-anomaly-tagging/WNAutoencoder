@@ -2,9 +2,9 @@ import torch
 import torch.nn as nn
 
 class ShallowEncoder(nn.Module):
-    def __init__(self, input_size=256):
+    def __init__(self, input_size=256,width_multiplier=2):
         super().__init__()
-        hidden_size = input_size * 2
+        hidden_size = input_size * width_multiplier
         self.layer1 = nn.Linear(input_size, hidden_size)
         self.layer2 = nn.Linear(hidden_size, hidden_size)
 
@@ -14,9 +14,9 @@ class ShallowEncoder(nn.Module):
         return x
 
 class ShallowDecoder(nn.Module):
-    def __init__(self, output_size=256):
+    def __init__(self, output_size=256,width_multiplier=2):
         super().__init__()
-        hidden_size = output_size * 2
+        hidden_size = output_size * width_multiplier
         self.layer1 = nn.Linear(hidden_size, hidden_size)
         self.layer2 = nn.Linear(hidden_size, output_size)
 
@@ -27,9 +27,9 @@ class ShallowDecoder(nn.Module):
 # --- Deep Model (5 layers) ---
 
 class DeepEncoder(nn.Module):
-    def __init__(self, input_size=256):
+    def __init__(self, input_size=256,width_multiplier=2):
         super().__init__()
-        hidden_size = input_size * 2
+        hidden_size = input_size * width_multiplier
         self.layer1 = nn.Linear(input_size, hidden_size)
         self.layer2 = nn.Linear(hidden_size, hidden_size)
         self.layer3 = nn.Linear(hidden_size, hidden_size)
@@ -45,9 +45,9 @@ class DeepEncoder(nn.Module):
         return x
 
 class DeepDecoder(nn.Module):
-    def __init__(self, output_size=256):
+    def __init__(self, output_size=256,width_multiplier=2):
         super().__init__()
-        hidden_size = output_size * 2
+        hidden_size = output_size * width_multiplier
         self.layer1 = nn.Linear(hidden_size, hidden_size)
         self.layer2 = nn.Linear(hidden_size, hidden_size)
         self.layer3 = nn.Linear(hidden_size, hidden_size)
@@ -60,6 +60,7 @@ class DeepDecoder(nn.Module):
         x = torch.relu(self.layer3(x))
         x = torch.relu(self.layer4(x))
         return self.layer5(x)
+
 
 # --- Model Registry ---
 
@@ -78,6 +79,20 @@ MODEL_REGISTRY = {
         "savedir": "deep",
         "process":"QCD"
     },
+    "feat16_encoder64_deep_qcd": {
+        "input_dim": 16,
+        "encoder": lambda: DeepEncoder(16,4),
+        "decoder": lambda: DeepDecoder(16,4),
+        "savedir": "feat16_encoder64_deep_qcd",
+        "process":"QCD"
+    },
+    "feat32_encoder128_deep_qcd": {
+        "input_dim": 32,
+        "encoder": lambda: DeepEncoder(32,4),
+        "decoder": lambda: DeepDecoder(32,4),
+        "savedir": "feat32_encoder128_deep_qcd",
+        "process":"QCD"
+    },
     "deep_ttbar": {
         "input_dim": 256,
         "encoder": lambda: DeepEncoder(256),
@@ -85,4 +100,39 @@ MODEL_REGISTRY = {
         "savedir": "deep_ttbar",
         "process":"TTto4Q"
     },
+    "feat2_encoder32_shallow_ttbar": {
+        "input_dim": 2,
+        "encoder": lambda: ShallowEncoder(2,16),
+        "decoder": lambda: ShallowDecoder(2,16),
+        "savedir": "feat2_encoder32_shallow_ttbar",
+        "process":"TTto4Q"
+    },  
+    "feat16_encoder128_shallow_ttbar": {
+        "input_dim": 16,
+        "encoder": lambda: ShallowEncoder(16,8),
+        "decoder": lambda: ShallowDecoder(16,8),
+        "savedir": "feat16_encoder128_shallow_ttbar",
+        "process":"TTto4Q"
+    },
+    "feat64_encoder256_shallow_ttbar": {
+        "input_dim": 64,
+        "encoder": lambda: ShallowEncoder(64,4),
+        "decoder": lambda: ShallowDecoder(64,4),
+        "savedir": "feat64_encoder256_shallow_ttbar",
+        "process":"TTto4Q"
+    },  
+    "feat128_encoder512_shallow_ttbar": {
+        "input_dim": 128,
+        "encoder": lambda: ShallowEncoder(128,4),
+        "decoder": lambda: ShallowDecoder(128,4),
+        "savedir": "feat128_encoder512_shallow_ttbar",
+        "process":"TTto4Q"
+    },  
+    "feat128_encoder1024_shallow_ttbar": {
+        "input_dim": 128,
+        "encoder": lambda: ShallowEncoder(128,8),
+        "decoder": lambda: ShallowDecoder(128,8),
+        "savedir": "feat128_encoder1024_shallow_ttbar",
+        "process":"TTto4Q"
+    },         
 }
