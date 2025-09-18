@@ -13,7 +13,7 @@ from model_registry import MODEL_REGISTRY
 # --- Configuration ---
 CONFIG_PATH = "dataset_config.json"
 BATCH_SIZE = 512
-MODEL_NAME = "feat16_encoder64_deep_qcd"
+MODEL_NAME = "feat4_encoder32_shallow_hbb"
 model_config = MODEL_REGISTRY[MODEL_NAME]
 INPUT_DIM = model_config["input_dim"]
 SAVEDIR = model_config["savedir"]
@@ -28,15 +28,15 @@ BKG_NAME = model_config["process"]
 
 WNAE_PARAMS = {
     "sampling": "pcd",
-    "n_steps": 10,
-    "step_size": None,
-    "noise": 0.2,
+    "n_steps": 30,
+    "step_size": 0.1,
+    "noise": None,
     "temperature": 0.05,
-    "bounds": (-3., 3.),
+    "bounds": (-6.,6.),
     "mh": False,
     "initial_distribution": "gaussian",
     "replay": True,
-    "replay_ratio": 0.95,
+    "replay_ratio": 0.5,
     "buffer_size": 10000,
 }
 
@@ -69,42 +69,47 @@ model.load_state_dict(torch.load(CHECKPOINT_PATH, map_location=DEVICE)["model_st
 model.to(DEVICE)
 model.eval()
 
-def compute_losses(dataloader):
-    losses = []
+def compute_mse(dataloader):
+    mses = []
     for batch in dataloader:
         x = batch[0].to(DEVICE)
         recon_x = model.decoder(model.encoder(x))
-        per_sample_loss = torch.mean((x - recon_x) ** 2, dim=1)
-        losses.extend(per_sample_loss.detach().cpu().numpy())
-    return np.array(losses)
+        per_sample_mse = torch.mean((x - recon_x) ** 2, dim=1)
+        mses.extend(per_sample_mse.detach().cpu().numpy())
+    return np.array(mses)
 
-print("[INFO] Computing background losses...")
-bkg_losses = compute_losses(bkg_loader)
+print("[INFO] Computing background mse...")
+bkg_mses = compute_mse(bkg_loader)
 
-sig_losses_dict = {}
+sig_mses_dict = {}
 for name, loader in signal_loaders.items():
-    print(f"[INFO] Computing losses for signal: {name}")
-    sig_losses_dict[name] = compute_losses(loader)
-# --- Combined figure: loss, ROC, mass, pt ---
+    print(f"[INFO] Computing mse for signal: {name}")
+    sig_mses_dict[name] = compute_mse(loader)
+# --- Combined figure: mse, ROC, mass, pt ---
 fig, axes = plt.subplots(2, 2, figsize=(14, 10))
 
-# --- 1) Loss distributions ---
-ax_loss = axes[0, 0]
-bins_loss = np.linspace(0, 500, 101)
-ax_loss.hist(bkg_losses, bins=bins_loss, histtype='step', label=BKG_NAME, density=True)
-for name, losses in sig_losses_dict.items():
-    ax_loss.hist(losses, bins=bins_loss, histtype='step', label=name, density=True)
-ax_loss.set_xlabel("Reconstruction MSE")
-ax_loss.set_ylabel("Density")
-ax_loss.set_xlim([0, 500])
-ax_loss.legend()
+# --- 1) Mse distributions ---
+ax_mse = axes[0, 0]
+
+all_mses = np.concatenate([bkg_mses] + list(sig_mses_dict.values()))
+_, x_max = np.percentile(all_mses, [0, 99.])
+
+
+bins_mse = np.linspace(0, x_max, 101)
+ax_mse.hist(bkg_mses, bins=bins_mse, histtype='step', label=BKG_NAME, density=True)
+for name, mses in sig_mses_dict.items():
+    ax_mse.hist(mses, bins=bins_mse, histtype='step', label=name, density=True)
+ax_mse.set_xlabel("Reconstruction MSE")
+ax_mse.set_ylabel("Density")
+ax_mse.set_xlim([0, x_max])
+ax_mse.legend()
 
 # --- 2) ROC curves ---
 ax_roc = axes[0, 1]
-all_labels = np.zeros_like(bkg_losses)
-for name, sig_losses in sig_losses_dict.items():
-    labels = np.concatenate([all_labels, np.ones_like(sig_losses)])
-    scores = np.concatenate([bkg_losses, sig_losses])
+all_labels = np.zeros_like(bkg_mses)
+for name, sig_mses in sig_mses_dict.items():
+    labels = np.concatenate([all_labels, np.ones_like(sig_mses)])
+    scores = np.concatenate([bkg_mses, sig_mses])
     fpr, tpr, _ = roc_curve(labels, scores)
     roc_auc = auc(fpr, tpr)
     ax_roc.plot(fpr, tpr, label=f"{name} (AUC = {roc_auc:.3f})")
@@ -148,7 +153,7 @@ print(f"Saved {savefig}")
 # --- Save each subplot individually ---
 #Thank you SO: https://stackoverflow.com/questions/4325733/save-a-subplot-in-matplotlib
 individual_plots = {
-    "loss": ax_loss,
+    "mse": ax_mse,
     "roc": ax_roc,
     "mass": ax_mass,
     "pt": ax_pt,

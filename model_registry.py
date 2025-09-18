@@ -86,6 +86,13 @@ MODEL_REGISTRY = {
         "savedir": "feat16_encoder64_deep_qcd",
         "process":"QCD"
     },
+    "feat16_encoder64_shallow_qcd": {
+        "input_dim": 16,
+        "encoder": lambda: ShallowEncoder(16,4),
+        "decoder": lambda: ShallowDecoder(16,4),
+        "savedir": "feat16_encoder64_shallow_qcd",
+        "process":"QCD"
+    },
     "feat32_encoder128_deep_qcd": {
         "input_dim": 32,
         "encoder": lambda: DeepEncoder(32,4),
@@ -134,5 +141,27 @@ MODEL_REGISTRY = {
         "decoder": lambda: ShallowDecoder(128,8),
         "savedir": "feat128_encoder1024_shallow_ttbar",
         "process":"TTto4Q"
-    },         
+    },    
+    "feat4_encoder32_shallow_qcd": {
+        "input_dim": 4,
+        "encoder": lambda: ShallowEncoder(4,8),
+        "decoder": lambda: ShallowDecoder(4,8),
+        "savedir": "feat4_encoder32_shallow_qcd",
+        "process":"QCD"
+    },
+    "feat4_encoder32_shallow_ttbar": {
+        "input_dim": 4,
+        "encoder": lambda: ShallowEncoder(4,8),
+        "decoder": lambda: ShallowDecoder(4,8),
+        "savedir": "feat4_encoder32_shallow_ttbar",
+        "process":"TTto4Q"
+    },    
+
+    "feat4_encoder32_shallow_hbb": {
+        "input_dim": 4,
+        "encoder": lambda: ShallowEncoder(4,8),
+        "decoder": lambda: ShallowDecoder(4,8),
+        "savedir": "feat4_encoder32_shallow_hbb",
+        "process":"GluGluHto2B"
+    },  
 }
