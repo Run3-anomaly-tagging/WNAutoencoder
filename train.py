@@ -13,7 +13,7 @@ import itertools
 import json
 # ------------------- Config ------------------- #
 
-MODEL_NAME = "feat16_encoder64_deep_qcd"
+MODEL_NAME = "feat4_encoder32_shallow_hbb"
 model_config = MODEL_REGISTRY[MODEL_NAME]
 
 DATA_PATH = json.load(open("dataset_config.json"))[model_config["process"]]["path"]
@@ -22,30 +22,30 @@ INPUT_DIM = model_config["input_dim"]
 SAVEDIR = model_config["savedir"]
 CHECKPOINT_PATH = f"{SAVEDIR}/wnae_checkpoint_{INPUT_DIM}.pth"
 PLOT_DIR = f"{SAVEDIR}/plots/"
-BATCH_SIZE = 1024
-NUM_SAMPLES = 2 ** 14
+BATCH_SIZE = 2048
+NUM_SAMPLES = 2 ** 15
 LEARNING_RATE = 1e-3
-N_EPOCHS = 100
+N_EPOCHS = 30
 
 #For plotting
 PLOT_DISTRIBUTIONS = True
-PLOT_EPOCHS  = [1,10,20,50,100]  # Final epoch is always added automatically
+PLOT_EPOCHS  = [1,10,20]  # Final epoch is always added automatically
 BINS         = np.linspace(-5.0, 5.0, 101)
-N_1D_SAMPLES = 10   # how many random features to plot for non-final epochs
-N_2D_SAMPLES = 3    # how many 2D scatter plots to print
+N_1D_SAMPLES = 4   # how many random features to plot for non-final epochs
+N_2D_SAMPLES = 4    # how many 2D scatter plots to print
 RNG_SEED     = 0
 
 WNAE_PARAMS = {
     "sampling": "pcd",
-    "n_steps": 10,
-    "step_size": None,
-    "noise": 0.2,
+    "n_steps": 30,
+    "step_size": 0.1,
+    "noise": None,
     "temperature": 0.05,
-    "bounds": (-4.,4.),
+    "bounds": (-6.,6.),
     "mh": False,
     "initial_distribution": "gaussian",
     "replay": True,
-    "replay_ratio": 0.95,
+    "replay_ratio": 0.8,
     "buffer_size": 10000,
 }
 DEVICE = torch.device("cpu")
@@ -55,6 +55,8 @@ def run_training(model, optimizer, loss_function, n_epochs, training_loader, val
 
     training_losses = training_losses or []
     validation_losses = validation_losses or []
+    global PLOT_EPOCHS
+    PLOT_EPOCHS = sorted(set(PLOT_EPOCHS + [start_epoch + n_epochs]))#Add the last epoch to the list for plotting
     for i_epoch in range(start_epoch, start_epoch + n_epochs):
         model.train()
         training_loss = 0
@@ -179,11 +181,6 @@ def main():
         training_losses = checkpoint["training_losses"]
         validation_losses = checkpoint["validation_losses"]
         print(f"Loaded checkpoint from epoch {start_epoch}")
-        print(model.buffer)
-        print(model.buffer.__len__())
-        print(optimizer.state_dict)
-        print(checkpoint["optimizer_state_dict"]["param_groups"])
-        exit()#For testing
     except FileNotFoundError:
         print(f"No checkpoint found at {CHECKPOINT_PATH}. Starting training from scratch.")
         start_epoch = 0
