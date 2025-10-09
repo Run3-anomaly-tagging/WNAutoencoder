@@ -1,0 +1,31 @@
+{
+  "QCD_HT-400to600": {
+    "path": "/store/user/roguljic/anomaly-tagging/H5_files/2022/QCD_HT-400to600.h5",
+    "xsec": 95620
+  },
+  "QCD_HT-600to800": {
+    "path": "/store/user/roguljic/anomaly-tagging/H5_files/2022/QCD_HT-600to800.h5",
+    "xsec": 13540
+  },
+  "QCD_HT-800to1000": {
+    "path": "/store/user/roguljic/anomaly-tagging/H5_files/2022/QCD_HT-800to1000.h5",
+    "xsec": 3033
+  },
+  "QCD_HT-1000to1200": {
+    "path": "/store/user/roguljic/anomaly-tagging/H5_files/2022/QCD_HT-1000to1200.h5",
+    "xsec": 883
+  },
+  "QCD_HT-1200to1500": {
+    "path": "/store/user/roguljic/anomaly-tagging/H5_files/2022/QCD_HT-1200to1500.h5",
+    "xsec": 383
+  },
+  "QCD_HT-1500to2000": {
+    "path": "/store/user/roguljic/anomaly-tagging/H5_files/2022/QCD_HT-1500to2000.h5",
+    "xsec": 125
+  },
+  "QCD_HT-2000toInf": {
+    "path": "/store/user/roguljic/anomaly-tagging/H5_files/2022/QCD_HT-2000toInf.h5",
+    "xsec": 25.6
+  }
+}
+  
