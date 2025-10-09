@@ -4,14 +4,16 @@ import torch
 from torch.utils.data import Dataset
 from utils.h5_helpers import extract_hidden_features
 class JetDataset(Dataset):
-    def __init__(self, filepath, indices=None, input_dim=None, key="Jets",
-                 mean=None, std=None, pt_cut=None):
+    def __init__(self, filepath, indices=None, input_dim=None, key="Jets", pt_cut=None):
         self.file = h5py.File(filepath, 'r')
         self.jets = self.file[key]
 
         self.pt = self.jets['pt'][:]
         self.mass = self.jets['mass'][:]
-
+        self.gloParT_QCD = self.jets['globalParT3_QCD'][:]
+        self.gloParT_Tbqq = self.jets['globalParT3_TopbWqq'][:]
+        self.gloParT_Tbq = self.jets['globalParT3_TopbWq'][:]
+        self.mass = self.jets['mass'][:]
         self.total_len = len(self.jets)
 
         # Apply pt cut if requested
@@ -23,15 +25,7 @@ class JetDataset(Dataset):
                 indices = selected
 
         self.indices = np.arange(self.total_len) if indices is None else np.array(indices)
-
         self.input_dim = input_dim
-
-        if mean is not None and std is not None:
-            self.mean = torch.tensor(mean, dtype=torch.float32)
-            self.std = torch.tensor(std, dtype=torch.float32)
-        else:
-            self.mean = None
-            self.std = None
 
     def __len__(self):
         return len(self.indices)
@@ -44,10 +38,6 @@ class JetDataset(Dataset):
             features = features[:self.input_dim]
 
         features_tensor = torch.tensor(features)
-
-        if self.mean is not None and self.std is not None:
-            features_tensor = (features_tensor - self.mean[:len(features_tensor)]) / self.std[:len(features_tensor)]
-
         return features_tensor, features_tensor
 
     def get_pt(self):
@@ -55,6 +45,15 @@ class JetDataset(Dataset):
 
     def get_mass(self):
         return self.mass[self.indices]
+
+    def get_gloParT_QCD(self):
+        return self.gloParT_QCD[self.indices]
+
+    def get_gloParT_Tbqq(self):
+        return self.gloParT_Tbqq[self.indices]
+
+    def get_gloParT_Tbq(self):
+        return self.gloParT_Tbq[self.indices]
 
     def close(self):
         self.file.close()
