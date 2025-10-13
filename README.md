@@ -23,8 +23,9 @@ python evaluate_wnae.py
 ```
 ### To preprocess input files
 
-The preprocessing script rescales QCD jet features to zero mean and unit standard deviation, and applies the same scaling to signal jet features.
+The preprocessing script rescales QCD jet features to zero mean and unit standard deviation, and applies the same scaling to signal jet features. There are other options for manipulating datasets as well. 
 > **Note:** You need to manually edit the main function in `preprocessing.py` to select the input files and specify which scaling to apply.
 ```
+cd data
 python preprocessing.py
 ```

@@ -6,30 +6,30 @@ from tqdm import tqdm
 from torch.utils.data import DataLoader, RandomSampler
 from utils.jet_dataset import JetDataset
 from wnae import WNAE
-from model_registry import MODEL_REGISTRY
+from model_config.model_registry import MODEL_REGISTRY
 import os, random
 from utils.plotting_helpers import ensure_dir, plot_epoch_1d, plot_epoch_2d
 import itertools
 import json
 # ------------------- Config ------------------- #
 
-MODEL_NAME = "feat4_encoder32_shallow_hbb"
+MODEL_NAME = "feat4_encoder32_deep_qcd"
 model_config = MODEL_REGISTRY[MODEL_NAME]
 
-DATA_PATH = json.load(open("dataset_config.json"))[model_config["process"]]["path"]
-#DATA_PATH = json.load(open("dataset_config_alt.json"))[model_config["process"]]["path"]
+DATA_PATH = json.load(open("data/dataset_config_small.json"))[model_config["process"]]["path"]
+#DATA_PATH = json.load(open("data/dataset_config_alt.json"))[model_config["process"]]["path"]
 INPUT_DIM = model_config["input_dim"]
 SAVEDIR = model_config["savedir"]
 CHECKPOINT_PATH = f"{SAVEDIR}/wnae_checkpoint_{INPUT_DIM}.pth"
 PLOT_DIR = f"{SAVEDIR}/plots/"
 BATCH_SIZE = 2048
-NUM_SAMPLES = 2 ** 15
+NUM_SAMPLES = 2 ** 13
 LEARNING_RATE = 1e-3
-N_EPOCHS = 30
+N_EPOCHS = 40
 
 #For plotting
 PLOT_DISTRIBUTIONS = True
-PLOT_EPOCHS  = [1,10,20]  # Final epoch is always added automatically
+PLOT_EPOCHS  = [1,5,20]  # Final epoch is always added automatically
 BINS         = np.linspace(-5.0, 5.0, 101)
 N_1D_SAMPLES = 4   # how many random features to plot for non-final epochs
 N_2D_SAMPLES = 4    # how many 2D scatter plots to print
@@ -38,14 +38,14 @@ RNG_SEED     = 0
 WNAE_PARAMS = {
     "sampling": "pcd",
     "n_steps": 30,
-    "step_size": 0.1,
+    "step_size": 0.2,
     "noise": None,
     "temperature": 0.05,
     "bounds": (-6.,6.),
     "mh": False,
     "initial_distribution": "gaussian",
     "replay": True,
-    "replay_ratio": 0.8,
+    "replay_ratio": 0.95,
     "buffer_size": 10000,
 }
 DEVICE = torch.device("cpu")

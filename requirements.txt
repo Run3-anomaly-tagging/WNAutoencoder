@@ -6,3 +6,4 @@ h5py
 tqdm
 matplotlib
 scikit-learn
+optuna
