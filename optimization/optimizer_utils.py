@@ -6,6 +6,7 @@ from utils.jet_dataset import JetDataset
 from tqdm import tqdm
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
+import pprint
 
 DEVICE = torch.device("cpu")
 
@@ -29,6 +30,8 @@ def run_training(model, optimizer, n_epochs, training_loader, validation_loader)
             optimizer.step()
             training_loss += train_dict["loss"]
             n_batches += 1
+
+            print(f"Positive energy: {train_dict['positive_energy']:.4f}, Negative energy: {train_dict['negative_energy']:.4f}")
 
         training_losses.append(training_loss / n_batches)
 
@@ -55,11 +58,11 @@ def train_one_wnae_model(training_config, trial, model_number=None):
     """
 
     # ----------------- Update hyperparameters from trial -----------------
-    n_steps = trial.suggest_int("n_steps", 10, 50)
-    step_size = trial.suggest_float("step_size", 0.05, 0.5)
+    #n_steps = trial.suggest_int("n_steps", 10, 50)
+    #step_size = trial.suggest_float("step_size", 0.05, 0.5)
 
     wnae_params = training_config["WNAE_PARAMS"].copy()
-    wnae_params.update({"n_steps": n_steps, "step_size": step_size})
+    #wnae_params.update({"n_steps": n_steps, "step_size": step_size})
     learning_rate = training_config["LEARNING_RATE"]
     # ---------------------------------------------------------------------
 
@@ -83,13 +86,15 @@ def train_one_wnae_model(training_config, trial, model_number=None):
         batch_size=training_config["BATCH_SIZE"],
         sampler=RandomSampler(val_dataset, replacement=True, num_samples=training_config["NUM_SAMPLES"])
     )
-
+    print("WNAE params")
+    print(wnae_params)
     model_config = training_config["MODEL_CONFIG"]
     model = WNAE(
         encoder=model_config["encoder"](),
         decoder=model_config["decoder"](),
         **wnae_params
     ).to(DEVICE)
+    pprint.pprint(vars(model))
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
 
@@ -104,26 +109,7 @@ def train_one_wnae_model(training_config, trial, model_number=None):
 
     return summary, model
 
-def compute_metric(training_config, summary, study_name=None):
-    """
-    Compute chi2 metric for a trained model.
-    """
-    return minimal_ptheta_profile_chisquare(training_config, summary, study_name)
-
-
-def objective(trial, training_config, n_models_per_trial=1):
-    """
-    Optuna objective function: average chi² over n_models_per_trial.
-    """
-    metrics = []
-    for i in range(n_models_per_trial):
-        summary = train_one_wnae_model(training_config, trial, model_number=i)
-        chi2 = compute_metric(training_config, summary)
-        metrics.append(chi2)
-
-    return np.mean(metrics)
-
-def minimal_ptheta_profile_chisquare(model, val_dataset, n_samples=10000, n_bins=50, bounds=(-4,4)):
+def minimal_ptheta_profile_chisquare(model, val_dataset, n_samples=10000, n_bins=50, bounds=(-4,4), use_temperature=False,name="test",evaluate_on_uniform=False):
     """
     Compute average chi2 between validation data (used to compute p_theta) 
     and MCMC-generated samples using model probabilities from energies.
@@ -145,6 +131,14 @@ def minimal_ptheta_profile_chisquare(model, val_dataset, n_samples=10000, n_bins
 
     val_data = torch.stack([val_dataset[i][0] for i in range(n_samples)]).to(DEVICE)
     input_dim = val_data.shape[1]
+    if use_temperature:
+        temperature = model.temperature
+        print(f"Using model temperature for scaling energy: T={temperature:.3f}")
+    else:
+        temperature = 1.0
+
+    #Sanity check to see if the buffer is empty (shouldn't be!)
+    print("Buffer length before MCMC: ", len(model.buffer.buffer))
 
     negative_samples = model.run_mcmc(n_samples=n_samples, replay=True).detach().cpu().numpy()
 
@@ -158,27 +152,35 @@ def minimal_ptheta_profile_chisquare(model, val_dataset, n_samples=10000, n_bins
     all_hist_neg  = []
     all_p_theta  = []
 
+    uniform_samples = torch.empty((n_samples, input_dim), device=DEVICE).uniform_(low, high)
     with torch.no_grad():
-        eval_dict = model.evaluate(val_data)
-        energies_all = energies_all = eval_dict["reco_errors"].numpy()
+        if evaluate_on_uniform:
+            eval_dict = model.evaluate(uniform_samples)
+            energies_all = eval_dict["reco_errors"].cpu().numpy()
+            feature_vals_energy = uniform_samples.cpu().numpy()
+        else:
+            eval_dict = model.evaluate(val_data)
+            energies_all = eval_dict["reco_errors"].cpu().numpy()
+            feature_vals_energy = val_data.cpu().numpy()
 
     for i in range(input_dim):
-        feature_vals = val_data[:, i].cpu().numpy()
+        feature_vals_data = val_data[:, i].cpu().numpy()
+        feature_vals_for_energy = feature_vals_energy[:, i]  #either data or uniform random distribution
         energies = np.zeros(n_bins)
         counts = np.zeros(n_bins)
-        counts, _ = np.histogram(feature_vals, bins=bin_edges)
-        sums, _ = np.histogram(feature_vals, bins=bin_edges, weights=energies_all)
+        counts, _ = np.histogram(feature_vals_for_energy, bins=bin_edges)
+        sums, _ = np.histogram(feature_vals_for_energy, bins=bin_edges, weights=energies_all)
         energies = np.divide(sums, counts, out=np.zeros_like(sums, dtype=float), where=counts>0)        
 
         all_energies.append(energies)
-        q_theta = np.exp(-energies)
+        q_theta = np.exp(-energies/temperature)
         q_sum = np.sum(q_theta)
         p_theta = q_theta / q_sum if q_sum > 0 else np.zeros_like(q_theta)
         p_theta = p_theta / bin_width
         # Histogram negative samples for this feature
         neg_feature = negative_samples[:, i]
         hist_neg, _ = np.histogram(neg_feature, bins=bin_edges, density=True)
-        hist_data, _ = np.histogram(feature_vals, bins=bin_edges, density=True)
+        hist_data, _ = np.histogram(feature_vals_data, bins=bin_edges, density=True)
 
         all_hist_data.append(hist_data)
         all_hist_neg.append(hist_neg)
@@ -186,12 +188,18 @@ def minimal_ptheta_profile_chisquare(model, val_dataset, n_samples=10000, n_bins
 
 
         mask = p_theta > 0
-        chi2 = np.sum((hist_neg[mask] - p_theta[mask])**2 / (p_theta[mask] + 1e-8))
+        #chi2 = np.sum((hist_neg[mask] - p_theta[mask])**2 / (p_theta[mask] + 1e-8))
+        chi2 = 0.5 * np.sum((hist_neg[mask] - p_theta[mask])**2 / (hist_neg[mask] + p_theta[mask] + 1e-8))#Not really chi2, but the original chi2 penalizes strongly when p_theta is narrower than p_MCMC, this approach is more symmetric
         chi2_list.append(chi2)
 
     avg_chi2 = np.mean(chi2_list)
 
-    plot_feature_histograms_ptheta(np.array(all_hist_data),np.array(all_hist_neg),np.array(all_p_theta),bin_edges,chi2_list, avg_chi2,output_path="feature_histograms.pdf", energies=np.array(all_energies))
+    if val_dataset[0][0].shape[0] == 2:
+        print("Input dimension is 2 — plotting 2D energy map for sanity check.")
+        plot_energy_2d_map(model, bounds=bounds, n_points=100, output_path=f"{name}_energy_map.pdf")
+
+    plot_output_path = f"{name}.pdf"
+    plot_feature_histograms_ptheta(np.array(all_hist_data),np.array(all_hist_neg),np.array(all_p_theta),bin_edges,chi2_list, avg_chi2,output_path=plot_output_path, energies=np.array(all_energies))
     #plot_feature_histograms_ptheta(np.array(all_hist_data),np.array(all_hist_neg),np.array(all_p_theta), np.array(all_energies),bin_edges,chi2_list, avg_chi2,output_path="feature_histograms.pdf")
 
     return avg_chi2
@@ -236,3 +244,47 @@ def plot_feature_histograms_ptheta(hist_data, hist_neg, p_theta, bin_edges, chi2
             plt.xlim(bin_edges[0], bin_edges[-1])
             pdf.savefig()
             plt.close()
+
+def plot_energy_2d_map(model, bounds=(-4, 4), n_points=100, output_path="energy_map_2d.pdf"):
+    """
+    Plots the 2D energy landscape (reconstruction error) of the model
+    evaluated on a uniform grid over the given bounds.
+    Only makes sense for 2D inputs (useful for debugging).
+
+    Args:
+        model: trained WNAE model
+        bounds: (low, high) range for each axis
+        n_points: number of grid points per dimension
+        output_path: where to save the PDF
+    """
+
+    low, high = bounds
+    x = np.linspace(low, high, n_points)
+    y = np.linspace(low, high, n_points)
+    X, Y = np.meshgrid(x, y)
+
+    # Build uniform grid [n_points^2, 2]
+    grid = np.stack([X.ravel(), Y.ravel()], axis=1)
+    grid_tensor = torch.tensor(grid, dtype=torch.float32, device=next(model.parameters()).device)
+
+    # Evaluate model energy (reco error)
+    model.eval()
+    with torch.no_grad():
+        eval_dict = model.evaluate(grid_tensor)
+        energies = eval_dict["reco_errors"].cpu().numpy()
+
+    # Reshape back to 2D map
+    E = energies.reshape(n_points, n_points)
+
+    # Plot
+    with PdfPages(output_path) as pdf:
+        plt.figure(figsize=(6, 5))
+        plt.title("2D Energy Landscape")
+        plt.xlabel("Feature 1")
+        plt.ylabel("Feature 2")
+        plt.pcolormesh(X, Y, E, shading="auto")
+        plt.colorbar(label="Reconstruction error")
+        plt.tight_layout()
+        pdf.savefig()
+        plt.close()
+    print(f"Saved 2D energy map to {output_path}")

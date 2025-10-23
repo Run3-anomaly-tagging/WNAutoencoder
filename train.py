@@ -13,7 +13,7 @@ import itertools
 import json
 # ------------------- Config ------------------- #
 
-MODEL_NAME = "feat4_encoder32_deep_qcd"
+MODEL_NAME = "feat16_encoder12_bottleneck_qcd"
 model_config = MODEL_REGISTRY[MODEL_NAME]
 
 DATA_PATH = json.load(open("data/dataset_config_small.json"))[model_config["process"]]["path"]
@@ -23,13 +23,13 @@ SAVEDIR = model_config["savedir"]
 CHECKPOINT_PATH = f"{SAVEDIR}/wnae_checkpoint_{INPUT_DIM}.pth"
 PLOT_DIR = f"{SAVEDIR}/plots/"
 BATCH_SIZE = 2048
-NUM_SAMPLES = 2 ** 13
+NUM_SAMPLES = 2 ** 16
 LEARNING_RATE = 1e-3
-N_EPOCHS = 40
+N_EPOCHS = 30
 
 #For plotting
 PLOT_DISTRIBUTIONS = True
-PLOT_EPOCHS  = [1,5,20]  # Final epoch is always added automatically
+PLOT_EPOCHS  = [100]  # Final epoch is always added automatically
 BINS         = np.linspace(-5.0, 5.0, 101)
 N_1D_SAMPLES = 4   # how many random features to plot for non-final epochs
 N_2D_SAMPLES = 4    # how many 2D scatter plots to print
@@ -37,24 +37,44 @@ RNG_SEED     = 0
 
 WNAE_PARAMS = {
     "sampling": "pcd",
-    "n_steps": 30,
-    "step_size": 0.2,
-    "noise": None,
-    "temperature": 0.05,
-    "bounds": (-6.,6.),
+    "n_steps":10,
+    "noise":0.05,
+    "step_size":None,
+    "temperature": 1.0,
+    "bounds": (-4.,4.),
     "mh": False,
     "initial_distribution": "gaussian",
     "replay": True,
     "replay_ratio": 0.95,
-    "buffer_size": 10000,
+#    "distance":"sinkhorn"
 }
 DEVICE = torch.device("cpu")
 # -------------------  ------------------- #
 
-def run_training(model, optimizer, loss_function, n_epochs, training_loader, validation_loader,start_epoch=0, training_losses=None, validation_losses=None, checkpoint_prefix=None):
+def run_training(model, optimizer, loss_function, n_epochs, training_loader, validation_loader,checkpoint_path=None):
 
-    training_losses = training_losses or []
-    validation_losses = validation_losses or []
+    start_epoch = 0
+    training_losses, validation_losses = [], []
+    batch_pos_energies, batch_neg_energies = [], []
+
+    if checkpoint_path and os.path.exists(checkpoint_path):
+        print(f"Loading checkpoint from {checkpoint_path}")
+        ckpt = torch.load(checkpoint_path, map_location=DEVICE)
+        model.load_state_dict(ckpt["model_state_dict"])
+        optimizer.load_state_dict(ckpt["optimizer_state_dict"])
+        start_epoch = ckpt.get("epoch", 0)
+        training_losses = ckpt.get("training_losses", [])
+        validation_losses = ckpt.get("validation_losses", [])
+        batch_pos_energies = ckpt.get("batch_pos_energies", [])
+        batch_neg_energies = ckpt.get("batch_neg_energies", [])
+        if "buffer" in ckpt:
+            print("Loading replay buffer from checkpoint")
+            if model.buffer.max_samples!=len(ckpt["buffer"]):
+                print(f'WARNING: stored buffer len ({len(ckpt["buffer"])}) different from declared buffer size {model.buffer.max_samples}')
+                model.buffer.buffer = ckpt["buffer"][:model.buffer.max_samples]
+            else:
+                model.buffer.buffer = ckpt["buffer"]
+
     global PLOT_EPOCHS
     PLOT_EPOCHS = sorted(set(PLOT_EPOCHS + [start_epoch + n_epochs]))#Add the last epoch to the list for plotting
     for i_epoch in range(start_epoch, start_epoch + n_epochs):
@@ -78,8 +98,16 @@ def run_training(model, optimizer, loss_function, n_epochs, training_loader, val
 
             loss.backward()
             optimizer.step()
+
+            pos_e = train_dict.get("positive_energy", None)
+            neg_e = train_dict.get("negative_energy", None)
+            batch_pos_energies.append(pos_e)
+            batch_neg_energies.append(neg_e)
+            print(f"E+: {train_dict['positive_energy']:.2f}, E-: {train_dict['negative_energy']:.2f}")
+
             training_loss += train_dict["loss"]
             n_batches += 1
+
 
         training_losses.append(training_loss / n_batches)
 
@@ -123,15 +151,17 @@ def run_training(model, optimizer, loss_function, n_epochs, training_loader, val
 
         print(f"Epoch {i_epoch+1}/{start_epoch + n_epochs} | Train Loss: {training_losses[-1]:.4f} | Val Loss: {validation_losses[-1]:.4f}")
 
-        # Save checkpoint after each epoch
-        if checkpoint_prefix:
+        if checkpoint_path:
             torch.save({
                 "epoch": i_epoch + 1,
                 "model_state_dict": model.state_dict(),
                 "optimizer_state_dict": optimizer.state_dict(),
                 "training_losses": training_losses,
                 "validation_losses": validation_losses,
-            }, f"{SAVEDIR}/{checkpoint_prefix}_epoch{i_epoch + 1}.pth")
+                "batch_pos_energies": batch_pos_energies,
+                "batch_neg_energies": batch_neg_energies,
+                "buffer": model.buffer.buffer
+            }, checkpoint_path)
 
     return training_losses, validation_losses
 
@@ -151,6 +181,7 @@ def plot_losses(training_losses, validation_losses, save_dir):
 
 def main():
     dataset = JetDataset(DATA_PATH)
+    ensure_dir(SAVEDIR)
 
     # Split
     indices = np.arange(len(dataset))
@@ -173,45 +204,9 @@ def main():
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE)
 
-    try:
-        checkpoint = torch.load(CHECKPOINT_PATH, map_location=DEVICE)
-        model.load_state_dict(checkpoint["model_state_dict"])
-        optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
-        start_epoch = checkpoint["epoch"]
-        training_losses = checkpoint["training_losses"]
-        validation_losses = checkpoint["validation_losses"]
-        print(f"Loaded checkpoint from epoch {start_epoch}")
-    except FileNotFoundError:
-        print(f"No checkpoint found at {CHECKPOINT_PATH}. Starting training from scratch.")
-        start_epoch = 0
-        training_losses = []
-        validation_losses = []
+    training_losses, validation_losses = run_training(model=model,optimizer=optimizer,loss_function="wnae",n_epochs=N_EPOCHS,training_loader=train_loader,validation_loader=val_loader,checkpoint_path=CHECKPOINT_PATH)
 
-    # Train
-    training_losses, validation_losses = run_training(
-        model=model,
-        optimizer=optimizer,
-        loss_function="wnae",
-        n_epochs=N_EPOCHS,
-        training_loader=train_loader,
-        validation_loader=val_loader,
-        start_epoch=start_epoch,
-        training_losses=training_losses,
-        validation_losses=validation_losses,
-        #checkpoint_prefix="training"
-    )
-
-    # Plot
     plot_losses(training_losses, validation_losses, PLOT_DIR)
-
-    # Save checkpoint
-    torch.save({
-        "epoch": start_epoch + N_EPOCHS,
-        "model_state_dict": model.state_dict(),
-        "optimizer_state_dict": optimizer.state_dict(),
-        "training_losses": training_losses,
-        "validation_losses": validation_losses,
-    }, CHECKPOINT_PATH)
 
 if __name__ == "__main__":
     main()
