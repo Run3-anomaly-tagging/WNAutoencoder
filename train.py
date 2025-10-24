@@ -7,19 +7,20 @@ from torch.utils.data import DataLoader, RandomSampler
 from utils.jet_dataset import JetDataset
 from wnae import WNAE
 from model_config.model_registry import MODEL_REGISTRY
+from model_config.model_config import DEFAULT_WNAE_PARAMS, TUTORIAL_WNAE_PARAMS
 import os, random
 from utils.plotting_helpers import ensure_dir, plot_epoch_1d, plot_epoch_2d
 import itertools
 import json
 # ------------------- Config ------------------- #
 
-MODEL_NAME = "feat16_encoder12_bottleneck_qcd"
+MODEL_NAME = "shallow4_encoder64_qcd"
 model_config = MODEL_REGISTRY[MODEL_NAME]
 
 DATA_PATH = json.load(open("data/dataset_config_small.json"))[model_config["process"]]["path"]
 #DATA_PATH = json.load(open("data/dataset_config_alt.json"))[model_config["process"]]["path"]
 INPUT_DIM = model_config["input_dim"]
-SAVEDIR = model_config["savedir"]
+SAVEDIR = model_config["savedir"]+"_sinkhorn"
 CHECKPOINT_PATH = f"{SAVEDIR}/wnae_checkpoint_{INPUT_DIM}.pth"
 PLOT_DIR = f"{SAVEDIR}/plots/"
 BATCH_SIZE = 2048
@@ -31,27 +32,30 @@ N_EPOCHS = 30
 PLOT_DISTRIBUTIONS = True
 PLOT_EPOCHS  = [100]  # Final epoch is always added automatically
 BINS         = np.linspace(-5.0, 5.0, 101)
-N_1D_SAMPLES = 4   # how many random features to plot for non-final epochs
-N_2D_SAMPLES = 4    # how many 2D scatter plots to print
+N_1D_SAMPLES = 2   # how many random features to plot for non-final epochs
+N_2D_SAMPLES = 1    # how many 2D scatter plots to print
 RNG_SEED     = 0
 
-WNAE_PARAMS = {
-    "sampling": "pcd",
-    "n_steps":10,
-    "noise":0.05,
-    "step_size":None,
-    "temperature": 1.0,
-    "bounds": (-4.,4.),
-    "mh": False,
-    "initial_distribution": "gaussian",
-    "replay": True,
-    "replay_ratio": 0.95,
-#    "distance":"sinkhorn"
-}
-DEVICE = torch.device("cpu")
+# WNAE_PARAMS = {
+#     "sampling": "pcd",
+#     "n_steps":10,
+#     "noise":0.05,
+#     "step_size":None,
+#     "temperature": 1.0,
+#     "bounds": (-4.,4.),
+#     "mh": False,
+#     "initial_distribution": "gaussian",
+#     "replay": True,
+#     "replay_ratio": 0.95,
+# #    "distance":"sinkhorn"
+# }
+WNAE_PARAMS = TUTORIAL_WNAE_PARAMS
+WNAE_PARAMS["distance"] = "sinkhorn"
+#DEVICE = torch.device("cpu")
+DEVICE = torch.device("cuda")
 # -------------------  ------------------- #
 
-def run_training(model, optimizer, loss_function, n_epochs, training_loader, validation_loader,checkpoint_path=None):
+def run_training(model, optimizer, loss_function, n_epochs, training_loader, validation_loader,checkpoint_path=None,save_every=20):
 
     start_epoch = 0
     training_losses, validation_losses = [], []
@@ -69,11 +73,13 @@ def run_training(model, optimizer, loss_function, n_epochs, training_loader, val
         batch_neg_energies = ckpt.get("batch_neg_energies", [])
         if "buffer" in ckpt:
             print("Loading replay buffer from checkpoint")
-            if model.buffer.max_samples!=len(ckpt["buffer"]):
-                print(f'WARNING: stored buffer len ({len(ckpt["buffer"])}) different from declared buffer size {model.buffer.max_samples}')
-                model.buffer.buffer = ckpt["buffer"][:model.buffer.max_samples]
-            else:
-                model.buffer.buffer = ckpt["buffer"]
+            loaded_buffer = ckpt["buffer"]
+            if model.buffer.max_samples != len(loaded_buffer):
+                print(f"WARNING: stored buffer len ({len(loaded_buffer)}) "
+                      f"different from declared buffer size {model.buffer.max_samples}")
+                loaded_buffer = loaded_buffer[:model.buffer.max_samples]
+
+            model.buffer.buffer = [b.to(DEVICE, non_blocking=True) for b in loaded_buffer]
 
     global PLOT_EPOCHS
     PLOT_EPOCHS = sorted(set(PLOT_EPOCHS + [start_epoch + n_epochs]))#Add the last epoch to the list for plotting
@@ -81,12 +87,14 @@ def run_training(model, optimizer, loss_function, n_epochs, training_loader, val
         model.train()
         training_loss = 0
         n_batches = 0
+        epoch_pos_energy = 0
+        epoch_neg_energy = 0
 
         bar_format = f"Epoch {i_epoch+1}/{start_epoch + n_epochs}: " \
                      + "{l_bar}{bar:10}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]"
 
         for batch in tqdm(training_loader, bar_format=bar_format):
-            x = batch[0].to(DEVICE)
+            x = batch[0].to(DEVICE, non_blocking=True)
             optimizer.zero_grad()
 
             if loss_function == "wnae":
@@ -103,22 +111,26 @@ def run_training(model, optimizer, loss_function, n_epochs, training_loader, val
             neg_e = train_dict.get("negative_energy", None)
             batch_pos_energies.append(pos_e)
             batch_neg_energies.append(neg_e)
-            print(f"E+: {train_dict['positive_energy']:.2f}, E-: {train_dict['negative_energy']:.2f}")
+            epoch_pos_energy = epoch_pos_energy + pos_e
+            epoch_neg_energy = epoch_neg_energy + neg_e
+
+            #print(f"E+: {train_dict['positive_energy']:.2f}, E-: {train_dict['negative_energy']:.2f}")
 
             training_loss += train_dict["loss"]
             n_batches += 1
 
-
+        avg_pos_energy = epoch_pos_energy / n_batches
+        avg_neg_energy = epoch_neg_energy / n_batches
         training_losses.append(training_loss / n_batches)
 
         # Validation
         model.eval()
         validation_loss = 0
         n_batches = 0
-
+        #with torch.no_grad():
         for batch in validation_loader:
-            x = batch[0].to(DEVICE)
-
+            x = batch[0].to(DEVICE, non_blocking=True)
+    
             if loss_function == "wnae":
                 val_dict = model.validation_step(x)
             elif loss_function == "nae":
@@ -126,13 +138,13 @@ def run_training(model, optimizer, loss_function, n_epochs, training_loader, val
             elif loss_function == "ae":
                 val_dict = model.validation_step_ae(x, run_mcmc=True)
             validation_loss += val_dict["loss"]
-
+    
             if(n_batches==0 and PLOT_DISTRIBUTIONS==True and (i_epoch+1 in PLOT_EPOCHS)):
                 #Plotting features, positive and negative samples, only for first batch
                 mcmc = val_dict["mcmc_data"]["samples"][-1].detach().cpu().numpy()
                 data = x.detach().cpu().numpy()
                 ep_dir = ensure_dir(os.path.join(PLOT_DIR, f"epoch_{i_epoch+1}"))
-
+    
                 nfeat = data.shape[1]
                 if ((i_epoch +1) == (start_epoch + n_epochs)):
                     features = range(nfeat)  #plot all features at final epoch
@@ -149,9 +161,13 @@ def run_training(model, optimizer, loss_function, n_epochs, training_loader, val
 
         validation_losses.append(validation_loss / n_batches)
 
-        print(f"Epoch {i_epoch+1}/{start_epoch + n_epochs} | Train Loss: {training_losses[-1]:.4f} | Val Loss: {validation_losses[-1]:.4f}")
+        print(f"Epoch {i_epoch+1}/{start_epoch + n_epochs} | "
+      f"Train Loss: {training_losses[-1]:.4f} | "
+      f"Val Loss: {validation_losses[-1]:.4f} | "
+      f"Avg E+: {avg_pos_energy:.2f} | Avg E-: {avg_neg_energy:.2f}")
 
-        if checkpoint_path:
+        save_epoch = i_epoch%save_every==0 or (start_epoch + n_epochs -1 == i_epoch)
+        if checkpoint_path and save_epoch:
             torch.save({
                 "epoch": i_epoch + 1,
                 "model_state_dict": model.state_dict(),
@@ -193,9 +209,9 @@ def main():
     train_dataset = JetDataset(DATA_PATH, indices=train_idx, input_dim=INPUT_DIM)
     val_dataset = JetDataset(DATA_PATH, indices=val_idx, input_dim=INPUT_DIM)
 
-    train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, sampler=RandomSampler(train_dataset, replacement=True, num_samples=NUM_SAMPLES))
-    val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, sampler=RandomSampler(val_dataset, replacement=True, num_samples=NUM_SAMPLES))
-
+    train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, sampler=RandomSampler(train_dataset, replacement=True, num_samples=NUM_SAMPLES),pin_memory=True)
+    val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, sampler=RandomSampler(val_dataset, replacement=True, num_samples=NUM_SAMPLES),pin_memory=True)
+    print(DEVICE)
     model = WNAE(
         encoder=model_config["encoder"](),
         decoder=model_config["decoder"](),
