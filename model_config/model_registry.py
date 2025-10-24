@@ -180,5 +180,12 @@ MODEL_REGISTRY = {
         "decoder": lambda: ShallowDecoder(256),
         "savedir": "models/shallow_qcd",
         "process":"QCD"
+    },
+    "shallow2_encoder32_qcd": {
+        "input_dim": 2,
+        "encoder": lambda: ShallowEncoder(input_size=2,hidden_size=32),
+        "decoder": lambda: ShallowDecoder(output_size=2,hidden_size=32),
+        "savedir": "models/shallow2_encoder32_qcd",
+        "process":"QCD"
     }
 }

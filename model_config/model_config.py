@@ -6,9 +6,23 @@ DEFAULT_WNAE_PARAMS = {
     "sampling": "pcd", 
     "n_steps": 20,
     "step_size": None,
-    "noise": 0.2,
-    "temperature": 0.1,
+    "noise": 0.05,
+    "temperature": 1.0,
     "bounds": (-4.0, 4.0),
+    "mh": False,
+    "initial_distribution": "gaussian",
+    "replay": True,
+    "replay_ratio": 0.95,
+    "buffer_size": 10000,
+}
+
+TUTORIAL_WNAE_PARAMS = {
+    "sampling": "pcd",
+    "n_steps": 10,
+    "step_size": None,
+    "noise": 0.2,
+    "temperature": 0.05,
+    "bounds": (-4, 4),#In tutorial, this is (-3,3)
     "mh": False,
     "initial_distribution": "gaussian",
     "replay": True,
