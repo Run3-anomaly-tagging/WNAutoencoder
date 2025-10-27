@@ -187,5 +187,33 @@ MODEL_REGISTRY = {
         "decoder": lambda: ShallowDecoder(output_size=2,hidden_size=32),
         "savedir": "models/shallow2_encoder32_qcd",
         "process":"QCD"
+    },
+    "shallow4_encoder64_qcd": {
+        "input_dim": 4,
+        "encoder": lambda: ShallowEncoder(input_size=4,hidden_size=64),
+        "decoder": lambda: ShallowDecoder(output_size=4,hidden_size=64),
+        "savedir": "models/shallow4_encoder64_qcd",
+        "process":"QCD"
+    },
+    "shallow8_encoder64_qcd": {
+        "input_dim": 8,
+        "encoder": lambda: ShallowEncoder(input_size=8,hidden_size=64),
+        "decoder": lambda: ShallowDecoder(output_size=8,hidden_size=64),
+        "savedir": "models/shallow8_encoder64_qcd",
+        "process":"QCD"
+    },
+    "shallow16_encoder64_qcd": {
+        "input_dim": 16,
+        "encoder": lambda: ShallowEncoder(input_size=16,hidden_size=64),
+        "decoder": lambda: ShallowDecoder(output_size=16,hidden_size=64),
+        "savedir": "models/shallow16_encoder64_qcd",
+        "process":"QCD"
+    },
+    "shallow16_encoder128_qcd": {
+        "input_dim": 16,
+        "encoder": lambda: ShallowEncoder(input_size=16,hidden_size=128),
+        "decoder": lambda: ShallowDecoder(output_size=16,hidden_size=128),
+        "savedir": "models/shallow16_encoder128_qcd",
+        "process":"QCD"
     }
 }

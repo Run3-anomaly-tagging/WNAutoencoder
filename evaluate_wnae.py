@@ -9,6 +9,7 @@ from matplotlib.transforms import Bbox
 from utils.jet_dataset import JetDataset
 from wnae import WNAE
 from model_config.model_registry import MODEL_REGISTRY
+from model_config.model_config import DEFAULT_WNAE_PARAMS, TUTORIAL_WNAE_PARAMS
 
 import os
 import matplotlib.pyplot as plt
@@ -267,10 +268,10 @@ def plot_energy_distributions(model, bkg_loader, n_samples=10000, savedir="plots
 CONFIG_PATH = "data/dataset_config_small.json"
 #CONFIG_PATH = "data/dataset_config_alt.json"
 BATCH_SIZE = 2048
-MODEL_NAME = "feat16_encoder64_deep_qcd"
+MODEL_NAME = "shallow16_encoder128_qcd"
 model_config = MODEL_REGISTRY[MODEL_NAME]
 INPUT_DIM = model_config["input_dim"]
-SAVEDIR = model_config["savedir"]
+SAVEDIR = model_config["savedir"] + "_sinkhorn"
 CHECKPOINT_PATH = f"{SAVEDIR}/wnae_checkpoint_{INPUT_DIM}.pth"
 MAX_JETS = 20000
 DEVICE = torch.device("cpu")
@@ -280,18 +281,8 @@ DEVICE = torch.device("cpu")
 PT_CUT = None
 BKG_NAME = model_config["process"]
 
-WNAE_PARAMS = {
-    "sampling": "pcd",
-    "n_steps":10,
-    "noise":0.05,
-    "step_size":None,
-    "temperature": 1.0,
-    "bounds": (-4.,4.),
-    "mh": False,
-    "initial_distribution": "gaussian",
-    "replay": True,
-    "replay_ratio": 0.95
-}
+WNAE_PARAMS = TUTORIAL_WNAE_PARAMS
+WNAE_PARAMS["distance"] = "sinkhorn"
 
 os.makedirs(f"{SAVEDIR}/plots", exist_ok=True)
 

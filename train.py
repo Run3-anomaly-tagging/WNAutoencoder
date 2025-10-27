@@ -14,7 +14,7 @@ import itertools
 import json
 # ------------------- Config ------------------- #
 
-MODEL_NAME = "shallow4_encoder64_qcd"
+MODEL_NAME = "shallow16_encoder128_qcd"
 model_config = MODEL_REGISTRY[MODEL_NAME]
 
 DATA_PATH = json.load(open("data/dataset_config_small.json"))[model_config["process"]]["path"]
@@ -26,7 +26,7 @@ PLOT_DIR = f"{SAVEDIR}/plots/"
 BATCH_SIZE = 2048
 NUM_SAMPLES = 2 ** 16
 LEARNING_RATE = 1e-3
-N_EPOCHS = 30
+N_EPOCHS = 400
 
 #For plotting
 PLOT_DISTRIBUTIONS = True
