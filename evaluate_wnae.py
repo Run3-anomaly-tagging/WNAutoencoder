@@ -556,14 +556,14 @@ def run_full_evaluation(
     if generate_all_plots:
         # Energy map with MCMC
         try:
-            plot_reco_map_with_mcmc(model, savedir=savedir_plots, feature_idx=(0, 1), n_chains_to_plot=5, value_range=(-3, 3))
+            plot_reco_map_with_mcmc(model, savedir=savedir_plots, feature_idx=(0, 1), n_chains_to_plot=5, value_range=(-3, 3), device=device_t)
             summary["plots"].append("reco_energy_map_mcmc.png")
         except Exception as e:
             warnings.warn(f"plot_reco_map_with_mcmc failed: {e}")
 
         # Energy distributions
         try:
-            plot_energy_distributions(model, bkg_loader, savedir=savedir_plots)
+            plot_energy_distributions(model, bkg_loader, savedir=savedir_plots, device=device_t)
             summary["plots"].append("energy_distributions.png")
         except Exception as e:
             warnings.warn(f"plot_energy_distributions failed: {e}")
