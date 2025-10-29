@@ -2,32 +2,33 @@ import json
 import os
 from model_config.model_registry import MODEL_REGISTRY
 
-DEFAULT_WNAE_PARAMS = {
-    "sampling": "pcd", 
-    "n_steps": 20,
-    "step_size": None,
-    "noise": 0.05,
-    "temperature": 1.0,
-    "bounds": (-4.0, 4.0),
-    "mh": False,
-    "initial_distribution": "gaussian",
-    "replay": True,
-    "replay_ratio": 0.95,
-    "buffer_size": 10000,
-}
-
-TUTORIAL_WNAE_PARAMS = {
-    "sampling": "pcd",
-    "n_steps": 10,
-    "step_size": None,
-    "noise": 0.2,
-    "temperature": 0.05,
-    "bounds": (-4, 4),#In tutorial, this is (-3,3)
-    "mh": False,
-    "initial_distribution": "gaussian",
-    "replay": True,
-    "replay_ratio": 0.95,
-    "buffer_size": 10000,
+WNAE_PARAM_PRESETS = {
+    "DEFAULT_WNAE_PARAMS" : {
+        "sampling": "pcd",
+        "n_steps":10,
+        "noise":0.05,
+        "step_size":None,
+        "temperature": 1.0,
+        "bounds": (-4.,4.),
+        "mh": False,
+        "initial_distribution": "gaussian",
+        "replay": True,
+        "replay_ratio": 0.95
+    },
+    "TUTORIAL_WNAE_PARAMS" : {
+        "sampling": "pcd",
+        "n_steps": 10,
+        "step_size": None,
+        "noise": 0.2,
+        "temperature": 0.05,
+        "bounds": (-4, 4),#In tutorial, this is (-3,3)
+        "mh": False,
+        "initial_distribution": "gaussian",
+        "replay": True,
+        "replay_ratio": 0.95,
+        "buffer_size": 10000,
+        "distance": "sinkhorn"
+    }
 }
 
 DEFAULT_TRAINING_PARAMS = {

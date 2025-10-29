@@ -7,17 +7,19 @@ from torch.utils.data import DataLoader, RandomSampler
 from utils.jet_dataset import JetDataset
 from wnae import WNAE
 from model_config.model_registry import MODEL_REGISTRY
-from model_config.model_config import DEFAULT_WNAE_PARAMS, TUTORIAL_WNAE_PARAMS
+from model_config.model_config import WNAE_PARAM_PRESETS
 import os, random
 from utils.plotting_helpers import ensure_dir, plot_epoch_1d, plot_epoch_2d
 import itertools
 import json
+import time 
+from evaluate_wnae import run_full_evaluation 
 # ------------------- Config ------------------- #
 
 MODEL_NAME = "shallow16_encoder128_qcd"
 model_config = MODEL_REGISTRY[MODEL_NAME]
-
-DATA_PATH = json.load(open("data/dataset_config_small.json"))[model_config["process"]]["path"]
+CONFIG_PATH = "data/dataset_config_small.json"
+DATA_PATH = json.load(open(CONFIG_PATH))[model_config["process"]]["path"]
 #DATA_PATH = json.load(open("data/dataset_config_alt.json"))[model_config["process"]]["path"]
 INPUT_DIM = model_config["input_dim"]
 SAVEDIR = model_config["savedir"]+"_sinkhorn"
@@ -26,7 +28,7 @@ PLOT_DIR = f"{SAVEDIR}/plots/"
 BATCH_SIZE = 2048
 NUM_SAMPLES = 2 ** 16
 LEARNING_RATE = 1e-3
-N_EPOCHS = 400
+N_EPOCHS = 1
 
 #For plotting
 PLOT_DISTRIBUTIONS = True
@@ -36,23 +38,10 @@ N_1D_SAMPLES = 2   # how many random features to plot for non-final epochs
 N_2D_SAMPLES = 1    # how many 2D scatter plots to print
 RNG_SEED     = 0
 
-# WNAE_PARAMS = {
-#     "sampling": "pcd",
-#     "n_steps":10,
-#     "noise":0.05,
-#     "step_size":None,
-#     "temperature": 1.0,
-#     "bounds": (-4.,4.),
-#     "mh": False,
-#     "initial_distribution": "gaussian",
-#     "replay": True,
-#     "replay_ratio": 0.95,
-# #    "distance":"sinkhorn"
-# }
-WNAE_PARAMS = TUTORIAL_WNAE_PARAMS
+WNAE_PARAMS = WNAE_PARAM_PRESETS["TUTORIAL_WNAE_PARAMS"]
 WNAE_PARAMS["distance"] = "sinkhorn"
-#DEVICE = torch.device("cpu")
-DEVICE = torch.device("cuda")
+DEVICE = torch.device("cpu")
+#DEVICE = torch.device("cuda")
 # -------------------  ------------------- #
 
 def run_training(model, optimizer, loss_function, n_epochs, training_loader, validation_loader,checkpoint_path=None,save_every=20):
@@ -84,6 +73,7 @@ def run_training(model, optimizer, loss_function, n_epochs, training_loader, val
     global PLOT_EPOCHS
     PLOT_EPOCHS = sorted(set(PLOT_EPOCHS + [start_epoch + n_epochs]))#Add the last epoch to the list for plotting
     for i_epoch in range(start_epoch, start_epoch + n_epochs):
+        epoch_start_time = time.time()
         model.train()
         training_loss = 0
         n_batches = 0
@@ -160,11 +150,12 @@ def run_training(model, optimizer, loss_function, n_epochs, training_loader, val
             n_batches += 1
 
         validation_losses.append(validation_loss / n_batches)
-
+        epoch_time = time.time() - epoch_start_time
         print(f"Epoch {i_epoch+1}/{start_epoch + n_epochs} | "
-      f"Train Loss: {training_losses[-1]:.4f} | "
-      f"Val Loss: {validation_losses[-1]:.4f} | "
-      f"Avg E+: {avg_pos_energy:.2f} | Avg E-: {avg_neg_energy:.2f}")
+          f"Train Loss: {training_losses[-1]:.4f} | "
+          f"Val Loss: {validation_losses[-1]:.4f} | "
+          f"Avg E+: {avg_pos_energy:.2f} | Avg E-: {avg_neg_energy:.2f} | "
+          f"Time: {epoch_time:.1f}s")
 
         save_epoch = i_epoch%save_every==0 or (start_epoch + n_epochs -1 == i_epoch)
         if checkpoint_path and save_epoch:
@@ -211,7 +202,7 @@ def main():
 
     train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, sampler=RandomSampler(train_dataset, replacement=True, num_samples=NUM_SAMPLES),pin_memory=True)
     val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, sampler=RandomSampler(val_dataset, replacement=True, num_samples=NUM_SAMPLES),pin_memory=True)
-    print(DEVICE)
+    print(f"Device is {DEVICE}")
     model = WNAE(
         encoder=model_config["encoder"](),
         decoder=model_config["decoder"](),
@@ -221,8 +212,22 @@ def main():
     optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE)
 
     training_losses, validation_losses = run_training(model=model,optimizer=optimizer,loss_function="wnae",n_epochs=N_EPOCHS,training_loader=train_loader,validation_loader=val_loader,checkpoint_path=CHECKPOINT_PATH)
-
     plot_losses(training_losses, validation_losses, PLOT_DIR)
+
+    print("\n[INFO] Starting full evaluation of trained checkpoint...")
+    try:
+        summary = run_full_evaluation(
+            checkpoint_path=CHECKPOINT_PATH,
+            model_name=MODEL_NAME,
+            config_path=CONFIG_PATH,
+            device=str(DEVICE),
+            batch_size=BATCH_SIZE,
+            wnae_params=WNAE_PARAMS,
+            generate_all_plots=True
+        )
+        print(json.dumps(summary, indent=2))
+    except Exception as e:
+        print(f"[WARN] Full evaluation failed: {e}")
 
 if __name__ == "__main__":
     main()
