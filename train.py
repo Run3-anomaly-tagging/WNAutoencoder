@@ -14,45 +14,19 @@ import itertools
 import json
 import time 
 from evaluate_wnae import run_full_evaluation 
-# ------------------- Config ------------------- #
 
-MODEL_NAME = "shallow16_encoder128_qcd"
-model_config = MODEL_REGISTRY[MODEL_NAME]
-CONFIG_PATH = "data/dataset_config_small.json"
-DATA_PATH = json.load(open(CONFIG_PATH))[model_config["process"]]["path"]
-#DATA_PATH = json.load(open("data/dataset_config_alt.json"))[model_config["process"]]["path"]
-INPUT_DIM = model_config["input_dim"]
-SAVEDIR = model_config["savedir"]+"_sinkhorn"
-CHECKPOINT_PATH = f"{SAVEDIR}/wnae_checkpoint_{INPUT_DIM}.pth"
-PLOT_DIR = f"{SAVEDIR}/plots/"
-BATCH_SIZE = 2048
-NUM_SAMPLES = 2 ** 16
-LEARNING_RATE = 1e-3
-N_EPOCHS = 1
 
-#For plotting
-PLOT_DISTRIBUTIONS = True
-PLOT_EPOCHS  = [100]  # Final epoch is always added automatically
-BINS         = np.linspace(-5.0, 5.0, 101)
-N_1D_SAMPLES = 2   # how many random features to plot for non-final epochs
-N_2D_SAMPLES = 1    # how many 2D scatter plots to print
-RNG_SEED     = 0
-
-WNAE_PARAMS = WNAE_PARAM_PRESETS["TUTORIAL_WNAE_PARAMS"]
-WNAE_PARAMS["distance"] = "sinkhorn"
-DEVICE = torch.device("cpu")
-#DEVICE = torch.device("cuda")
-# -------------------  ------------------- #
-
-def run_training(model, optimizer, loss_function, n_epochs, training_loader, validation_loader,checkpoint_path=None,save_every=20):
+def run_training(model, optimizer, loss_function, n_epochs, training_loader, validation_loader,  plot_config, checkpoint_path=None,save_every=20, device=torch.device("cpu")):
 
     start_epoch = 0
     training_losses, validation_losses = [], []
     batch_pos_energies, batch_neg_energies = [], []
+    epoch_pos_energies = []
+    epoch_neg_energies = []
 
     if checkpoint_path and os.path.exists(checkpoint_path):
         print(f"Loading checkpoint from {checkpoint_path}")
-        ckpt = torch.load(checkpoint_path, map_location=DEVICE)
+        ckpt = torch.load(checkpoint_path, map_location=device)
         model.load_state_dict(ckpt["model_state_dict"])
         optimizer.load_state_dict(ckpt["optimizer_state_dict"])
         start_epoch = ckpt.get("epoch", 0)
@@ -60,6 +34,8 @@ def run_training(model, optimizer, loss_function, n_epochs, training_loader, val
         validation_losses = ckpt.get("validation_losses", [])
         batch_pos_energies = ckpt.get("batch_pos_energies", [])
         batch_neg_energies = ckpt.get("batch_neg_energies", [])
+        epoch_pos_energies = ckpt.get("epoch_pos_energies", [])
+        epoch_neg_energies = ckpt.get("epoch_neg_energies", [])
         if "buffer" in ckpt:
             print("Loading replay buffer from checkpoint")
             loaded_buffer = ckpt["buffer"]
@@ -68,10 +44,9 @@ def run_training(model, optimizer, loss_function, n_epochs, training_loader, val
                       f"different from declared buffer size {model.buffer.max_samples}")
                 loaded_buffer = loaded_buffer[:model.buffer.max_samples]
 
-            model.buffer.buffer = [b.to(DEVICE, non_blocking=True) for b in loaded_buffer]
+            model.buffer.buffer = [b.to(device, non_blocking=True) for b in loaded_buffer]
 
-    global PLOT_EPOCHS
-    PLOT_EPOCHS = sorted(set(PLOT_EPOCHS + [start_epoch + n_epochs]))#Add the last epoch to the list for plotting
+    plot_epochs = sorted(set(plot_config["plot_epochs"] + [start_epoch + n_epochs]))#Add the last epoch to the list for plotting
     for i_epoch in range(start_epoch, start_epoch + n_epochs):
         epoch_start_time = time.time()
         model.train()
@@ -84,7 +59,7 @@ def run_training(model, optimizer, loss_function, n_epochs, training_loader, val
                      + "{l_bar}{bar:10}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]"
 
         for batch in tqdm(training_loader, bar_format=bar_format):
-            x = batch[0].to(DEVICE, non_blocking=True)
+            x = batch[0].to(device, non_blocking=True)
             optimizer.zero_grad()
 
             if loss_function == "wnae":
@@ -112,6 +87,8 @@ def run_training(model, optimizer, loss_function, n_epochs, training_loader, val
         avg_pos_energy = epoch_pos_energy / n_batches
         avg_neg_energy = epoch_neg_energy / n_batches
         training_losses.append(training_loss / n_batches)
+        epoch_pos_energies.append(avg_pos_energy)
+        epoch_neg_energies.append(avg_neg_energy)
 
         # Validation
         model.eval()
@@ -119,7 +96,7 @@ def run_training(model, optimizer, loss_function, n_epochs, training_loader, val
         n_batches = 0
         #with torch.no_grad():
         for batch in validation_loader:
-            x = batch[0].to(DEVICE, non_blocking=True)
+            x = batch[0].to(device, non_blocking=True)
     
             if loss_function == "wnae":
                 val_dict = model.validation_step(x)
@@ -129,21 +106,21 @@ def run_training(model, optimizer, loss_function, n_epochs, training_loader, val
                 val_dict = model.validation_step_ae(x, run_mcmc=True)
             validation_loss += val_dict["loss"]
     
-            if(n_batches==0 and PLOT_DISTRIBUTIONS==True and (i_epoch+1 in PLOT_EPOCHS)):
+            if(n_batches==0 and plot_config["plot_distributions"]==True and (i_epoch+1 in plot_epochs)):
                 #Plotting features, positive and negative samples, only for first batch
                 mcmc = val_dict["mcmc_data"]["samples"][-1].detach().cpu().numpy()
                 data = x.detach().cpu().numpy()
-                ep_dir = ensure_dir(os.path.join(PLOT_DIR, f"epoch_{i_epoch+1}"))
+                ep_dir = ensure_dir(os.path.join(plot_config["plot_dir"], f"epoch_{i_epoch+1}"))
     
                 nfeat = data.shape[1]
                 if ((i_epoch +1) == (start_epoch + n_epochs)):
                     features = range(nfeat)  #plot all features at final epoch
                 else:
-                    features = random.Random(RNG_SEED).sample(range(nfeat), N_1D_SAMPLES)
+                    features = random.Random(plot_config["rng_seed"]).sample(range(nfeat), plot_config["n_1d_samples"])
                 
-                pairs = random.Random(RNG_SEED).sample(list(itertools.combinations(range(nfeat), 2)),N_2D_SAMPLES)#N_2D_SAMPLES pairs of features to plot
+                pairs = random.Random(plot_config["rng_seed"]).sample(list(itertools.combinations(range(nfeat), 2)),plot_config["n_2d_samples"])#N_2D_SAMPLES pairs of features to plot
                 # 1D fixed-binning histograms
-                plot_epoch_1d(data, mcmc, ep_dir, i_epoch+1, features, BINS)
+                plot_epoch_1d(data, mcmc, ep_dir, i_epoch+1, features, plot_config["bins"])
                 # a couple of 2D scatters for shape sanity
                 plot_epoch_2d(data, mcmc, ep_dir, i_epoch+1, pairs)
             
@@ -167,10 +144,12 @@ def run_training(model, optimizer, loss_function, n_epochs, training_loader, val
                 "validation_losses": validation_losses,
                 "batch_pos_energies": batch_pos_energies,
                 "batch_neg_energies": batch_neg_energies,
+                "epoch_pos_energies": epoch_pos_energies,
+                "epoch_neg_energies": epoch_neg_energies,
                 "buffer": model.buffer.buffer
             }, checkpoint_path)
 
-    return training_losses, validation_losses
+    return training_losses, validation_losses, epoch_pos_energies, epoch_neg_energies
 
 def plot_losses(training_losses, validation_losses, save_dir):
     epochs = list(range(len(training_losses)))
@@ -187,6 +166,39 @@ def plot_losses(training_losses, validation_losses, save_dir):
     plt.close()
 
 def main():
+    # ------------------- Config ------------------- #
+
+    MODEL_NAME = "shallow16_encoder128_qcd"
+    model_config = MODEL_REGISTRY[MODEL_NAME]
+    CONFIG_PATH = "data/dataset_config_small.json"
+    DATA_PATH = json.load(open(CONFIG_PATH))[model_config["process"]]["path"]
+    #DATA_PATH = json.load(open("data/dataset_config_alt.json"))[model_config["process"]]["path"]
+    INPUT_DIM = model_config["input_dim"]
+    SAVEDIR = model_config["savedir"]+"_sinkhorn"
+    CHECKPOINT_PATH = f"{SAVEDIR}/wnae_checkpoint_{INPUT_DIM}.pth"
+    PLOT_DIR = f"{SAVEDIR}/plots/"
+    BATCH_SIZE = 2048
+    NUM_SAMPLES = 2 ** 16
+    LEARNING_RATE = 1e-3
+    N_EPOCHS = 1
+
+    #To plot pos. and neg. distributions during training
+    plot_config = {
+    "plot_distributions": True,
+    "plot_epochs": [100],
+    "bins": np.linspace(-5.0, 5.0, 101),
+    "n_1d_samples": 2,
+    "n_2d_samples": 1,
+    "rng_seed": 0,
+    "plot_dir": PLOT_DIR
+    }
+
+    WNAE_PARAMS = WNAE_PARAM_PRESETS["TUTORIAL_WNAE_PARAMS"]
+    WNAE_PARAMS["distance"] = "sinkhorn"
+    DEVICE = torch.device("cpu")
+    #DEVICE = torch.device("cuda")
+    # -------------------  ------------------- #
+
     dataset = JetDataset(DATA_PATH)
     ensure_dir(SAVEDIR)
 
@@ -211,7 +223,7 @@ def main():
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE)
 
-    training_losses, validation_losses = run_training(model=model,optimizer=optimizer,loss_function="wnae",n_epochs=N_EPOCHS,training_loader=train_loader,validation_loader=val_loader,checkpoint_path=CHECKPOINT_PATH)
+    training_losses, validation_losses, _, _ = run_training(model=model,optimizer=optimizer,loss_function="wnae",n_epochs=N_EPOCHS,training_loader=train_loader,validation_loader=val_loader,checkpoint_path=CHECKPOINT_PATH, plot_config=plot_config, device=DEVICE)
     plot_losses(training_losses, validation_losses, PLOT_DIR)
 
     print("\n[INFO] Starting full evaluation of trained checkpoint...")
