@@ -23,6 +23,10 @@
   },
   "WtoQQ":{
     "path": "/uscms_data/d3/roguljic/AnomalyTagging/el9/WNAutoencoder/data/WJets800_scaled.h5"
+  },
+  "Top_bqq":{
+    "path": "/uscms_data/d3/roguljic/AnomalyTagging/el9/WNAutoencoder/data/TTto4Q_scaled_bqq.h5",
+    "xsec": 762
   }
 }
   

@@ -28,7 +28,75 @@ WNAE_PARAM_PRESETS = {
         "replay_ratio": 0.95,
         "buffer_size": 10000,
         "distance": "sinkhorn"
-    }
+    },
+    "CFG1" : {
+        "sampling": "pcd",
+        "n_steps": 20,
+        "step_size": None,
+        "noise": 0.2,
+        "temperature": 1.0,
+        "bounds": (-4, 4),
+        "mh": False,
+        "initial_distribution": "uniform",
+        "replay": True,
+        "replay_ratio": 0.95,
+        "buffer_size": 10000,
+        "distance": "sinkhorn"
+    },
+    "CFG2" : {
+        "sampling": "pcd",
+        "n_steps": 20,
+        "step_size": None,
+        "noise": 0.2,
+        "temperature": 0.3,
+        "bounds": (-4, 4),
+        "mh": False,
+        "initial_distribution": "uniform",
+        "replay": True,
+        "replay_ratio": 0.95,
+        "buffer_size": 10000,
+        "distance": "sinkhorn"
+    },
+    "CFG3" : {
+        "sampling": "pcd",
+        "n_steps": 20,
+        "step_size": None,
+        "noise": 0.2,
+        "temperature": 0.3,
+        "bounds": (-4, 4),
+        "mh": False,
+        "initial_distribution": "uniform",
+        "replay": True,
+        "replay_ratio": 0.999,
+        "buffer_size": 10000,
+        "distance": "sinkhorn"
+    },
+    "CFG4" : {
+        "sampling": "omi",
+        "bounds": (-4, 4),
+        "mh": False,
+        "buffer_size": 10000,
+        "distance": "sliced_wasserstein",
+        "initial_distribution": "gaussian",
+        "n_steps": 50,
+        "step_size": None,
+        "noise": 0.2,
+        "temperature": 1.0,
+    },
+    "CFG5" : {
+        "sampling": "pcd",
+        "n_steps": 50,
+        "step_size": None,
+        "noise": 0.2,
+        "temperature": 0.3,
+        "bounds": None,
+        "mh": False,
+        "initial_distribution": "gaussian",
+        "replay": True,
+        "replay_ratio": 0.90,
+        "buffer_size": 10000,
+        "distance": "sliced_wasserstein"
+    },
 }
 
 DEFAULT_TRAINING_PARAMS = {

@@ -16,6 +16,78 @@ from wnae import WNAE
 from model_config.model_registry import MODEL_REGISTRY
 from model_config.model_config import WNAE_PARAM_PRESETS
 
+
+def plot_latent_dimension_activity(model: WNAE, data_loader: DataLoader, savedir: str, device: torch.device = torch.device("cpu"), metrics=['std', 'mean_abs']
+) -> None:
+    """
+    Computes and plots the activity for each dimension of the latent space (output of the encoder).
+    """
+    if device is None:
+        device = next(model.parameters()).device
+
+    model.eval()
+    all_latents = []
+
+    with torch.no_grad():
+        for data in data_loader:
+            x = data[0].to(device)
+            latent_z = model.encoder(x)   
+            all_latents.append(latent_z.cpu())
+
+    if not all_latents:
+        print("Warning: No data was processed from the DataLoader. Skipping plot generation.")
+        return []
+
+    # Concatenate all batches into one tensor
+    all_latents_tensor = torch.cat(all_latents, dim=0)
+    latent_dim = all_latents_tensor.size(1)
+        
+    for metric in metrics:
+        if metric == 'std':
+            # Standard deviation across the dataset for each dimension
+            activity_values = all_latents_tensor.std(dim=0).numpy()
+            title_suffix = "Standard Deviation of Latent Dimensions"
+            y_label = "Standard Deviation (Activity)"
+            low_activity_threshold = 0.01
+        elif metric == 'mean_abs':
+            # Mean absolute value for each dimension
+            activity_values = all_latents_tensor.abs().mean(dim=0).numpy()
+            title_suffix = "Mean Absolute Value of Latent Dimensions"
+            y_label = "Mean Absolute Value (Activity)"
+            low_activity_threshold = 0.005
+        else:
+            print(f"Warning: Unknown metric '{metric}' skipped.")
+            continue
+
+        fig, ax = plt.subplots(figsize=(12, 6))
+
+        bars = ax.bar(np.arange(latent_dim), activity_values, color='skyblue', edgecolor='black', alpha=0.8)
+
+        low_activity_indices = np.where(activity_values < low_activity_threshold)[0]
+        
+        if low_activity_indices.size > 0:
+            print(f"   [!] {low_activity_indices.size} latent dimensions show activity below threshold ({low_activity_threshold:.4f} for {metric}).")
+            for idx in low_activity_indices:
+                # Color the low activity bar differently
+                bars[idx].set_color('salmon')
+                bars[idx].set_edgecolor('red')
+
+        ax.set_title(f"Diagnostic: Latent Space Activity ({title_suffix})", fontsize=16)
+        ax.set_xlabel("Latent Dimension Index", fontsize=12)
+        ax.set_ylabel(y_label, fontsize=12)
+        ax.set_xticks(np.arange(latent_dim))
+        ax.set_xticklabels([f"z{i}" for i in range(latent_dim)], rotation=45, ha='right')
+        ax.axhline(low_activity_threshold, color='red', linestyle='--', linewidth=1, label=f'Activity Threshold ({low_activity_threshold})')
+        ax.legend()
+        plt.tight_layout()
+
+        # Save the plot
+        plot_filepath = os.path.join(savedir, f"latent_activity_{metric}.png")
+        plt.savefig(plot_filepath)
+        plt.close(fig)
+        
+        print(f"Plot for {metric} saved to: {plot_filepath}")
+
 def compute_mse(model: torch.nn.Module, dataloader: DataLoader, device: torch.device):
     """Compute per-sample MSE (energy) for dataset using model encoder/decoder."""
     model.eval()
@@ -58,11 +130,11 @@ def plot_checkpoint_energies(checkpoint: Dict[str, Any], plot_dir="plots"):
     plt.close()
     print(f"[INFO] Energy plot saved to: {plot_path}")
 
-def load_dataset(file_path: str, input_dim: int, key="Jets", max_jets=10000, pt_cut=None):
+def load_dataset(file_path: str, input_dim: int, key="Jets", max_jets=10000, pt_cut=None, pca_file = None):
     """
     Load JetDataset and subsample to max_jets if needed.
     """
-    tmp_ds = JetDataset(file_path, input_dim=input_dim, key=key, pt_cut=pt_cut)
+    tmp_ds = JetDataset(file_path, input_dim=input_dim, key=key, pt_cut=pt_cut,pca_components=pca_file)
     if len(tmp_ds) > max_jets:
         sampled = np.random.choice(tmp_ds.indices, size=max_jets, replace=False)
         tmp_ds.indices = sampled
@@ -256,9 +328,10 @@ def plot_energy_distributions(model: WNAE, bkg_loader: DataLoader, n_samples=100
 
     x_pos_max = np.percentile(E_pos_list, 99)
     x_neg_max = np.percentile(E_neg_list, 99)
+    x_max = max(x_pos_max,x_neg_max)
 
-    bins_pos = np.linspace(0, x_pos_max, 50)
-    bins_neg = np.linspace(0, x_neg_max, 50)
+    bins_pos = np.linspace(0, x_max, 50)
+    bins_neg = np.linspace(0, x_max, 50)
 
     axs[0].hist(E_pos_list, bins=bins_pos,histtype='step', color='C0', fill=False)
     axs[0].set_title("E+ (data)")
@@ -270,8 +343,8 @@ def plot_energy_distributions(model: WNAE, bkg_loader: DataLoader, n_samples=100
     axs[1].set_title("E- (MCMC)")
     axs[1].set_xlabel("Reconstruction energy")
 
-    axs[0].set_xlim(0, x_pos_max)
-    axs[1].set_xlim(0, x_neg_max)
+    axs[0].set_xlim(0, x_max)
+    axs[1].set_xlim(0, x_max)
 
     plt.tight_layout()
     save_path = os.path.join(savedir, "energy_distributions.png")
@@ -279,49 +352,22 @@ def plot_energy_distributions(model: WNAE, bkg_loader: DataLoader, n_samples=100
     plt.close()
     print(f"[INFO] Saved {save_path}")
 
-def plot_reco_map_with_mcmc(model: WNAE, savedir="plots", n_bins=20,
-                            n_chains_to_plot=1, feature_idx=(0, 1),
-                            value_range=(-4, 4), device: torch.device = torch.device("cpu"), d_min=1.0):
+def plot_reco_map_with_mcmc(model: WNAE, bkg_loader: torch.utils.data.DataLoader, savedir="plots", feature_idx=(0, 1), value_range=(-4, 4), n_grid=100, n_chains_to_plot=1, device: torch.device = torch.device("cpu"), d_min=1.0):
     """
-    Plot a 2D map of model energies over buffer samples, overlaid with MCMC chains.
+    Build two side-by-side 2D energy maps:
+        Left  = scan around 1 data jet (fetched from dataloader)
+        Right = scan around 1 MCMC buffer jet
+    The right plot has MCMC chain overlaid.
     """
     os.makedirs(savedir, exist_ok=True)
+
     f1, f2 = feature_idx
     vmin, vmax = value_range
 
-    if not hasattr(model, "buffer") or len(model.buffer.buffer) == 0:
-        warnings.warn("Model buffer is empty or missing. Skipping reco map with mcmc.")
-        return
-
-    mcmc_jet = torch.stack(model.buffer.buffer).to(device)
-    try:
-        energy = model._WNAE__energy(mcmc_jet).detach().cpu().numpy()
-    except Exception as e:
-        warnings.warn(f"Failed to compute energies for buffer stack: {e}")
-        return
-
-    x = mcmc_jet[:, f1].cpu().numpy()
-    y = mcmc_jet[:, f2].cpu().numpy()
-
-    bin_edges = np.linspace(vmin, vmax, n_bins + 1)
-    hist_sum, _, _ = np.histogram2d(x, y, bins=(bin_edges, bin_edges), weights=energy)
-    hist_count, _, _ = np.histogram2d(x, y, bins=(bin_edges, bin_edges))
-    avg_energy = np.divide(hist_sum, hist_count, out=np.zeros_like(hist_sum), where=hist_count > 0)
-
-    fig, ax = plt.subplots(figsize=(7, 6))
-    im = ax.imshow(np.where(hist_count.T > 0, avg_energy.T, np.nan), origin="lower",
-                   extent=[vmin, vmax, vmin, vmax],
-                   aspect="auto", cmap="plasma")
-    cbar = plt.colorbar(im, ax=ax)
-    cbar.set_label("Reco. error")
-    ax.set_xlabel(f"Feature {f1}")
-    ax.set_ylabel(f"Feature {f2}")
-
-    # --- Overlay MCMC trajectories ---
+    # ----------------------------------------
+    # Helper: select_initial_indices, jets that are away from each other
+    # ----------------------------------------
     def select_initial_indices(x_arr, y_arr, n, d_min_local):
-        """
-        Greedy selection of indices such that each selected point is at least d_min away from others.
-        """
         selected = []
         for idx in np.random.permutation(len(x_arr)):
             if len(selected) == 0:
@@ -329,44 +375,122 @@ def plot_reco_map_with_mcmc(model: WNAE, savedir="plots", n_bins=20,
                 if len(selected) >= n:
                     break
                 continue
-            dist = np.sqrt((x_arr[idx] - x_arr[selected]) ** 2 + (y_arr[idx] - y_arr[selected]) ** 2)
+            dist = np.sqrt((x_arr[idx] - x_arr[selected]) ** 2 +
+                           (y_arr[idx] - y_arr[selected]) ** 2)
             if np.all(dist >= d_min_local):
                 selected.append(idx)
                 if len(selected) >= n:
                     break
         return selected
 
-    start_indices = select_initial_indices(x, y, n_chains_to_plot, d_min)
-    if len(start_indices) == 0:
-        warnings.warn("Could not select any initial indices for overlaying MCMC chains.")
-    else:
-        init_x = mcmc_jet[start_indices]
+    data_jet = None
+    with torch.no_grad():
+        for batch in bkg_loader:
+            jets = batch[0].to(device)
+            data_jet = jets[0].unsqueeze(0)
+            break
+    if data_jet is None:
+        print("[WARNING] Could not fetch a jet from DataLoader.")
+        return
+
+    if not hasattr(model, "buffer") or len(model.buffer.buffer) == 0:
+        print("[WARNING] Model buffer is empty — cannot build MCMC map.")
+        return
+
+    buffer_tensor = torch.stack(model.buffer.buffer).to(device)
+    mcmc_jet = buffer_tensor[0].unsqueeze(0)
+
+    grid_x = np.linspace(vmin, vmax, n_grid)
+    grid_y = np.linspace(vmin, vmax, n_grid)
+    xx, yy = np.meshgrid(grid_x, grid_y)
+
+    data_jet_e = model._WNAE__energy(data_jet).detach().cpu().item()
+    mcmc_jet_e = model._WNAE__energy(mcmc_jet).detach().cpu().item()
+    print(f"Selected data and mcmc jet energies: {data_jet_e:.1f} | {mcmc_jet_e:.1f}")
+
+    def compute_energy_map(base_jet):
+        energies = np.zeros_like(xx, dtype=float)
+        for i in range(n_grid):
+            for j in range(n_grid):
+                point = base_jet.clone()
+                point[:, f1] = torch.tensor(xx[i, j], device=device)
+                point[:, f2] = torch.tensor(yy[i, j], device=device)
+                with torch.no_grad():
+                    try:
+                        e = model._WNAE__energy(point)
+                        energies[i, j] = e.detach().cpu().item()
+                    except Exception as e:
+                        print(f"[WARNING] Energy computation failed at grid point ({i},{j}): {e}")
+                        energies[i, j] = np.nan
+        return energies
+
+    energies_datajet = compute_energy_map(data_jet)
+    energies_mcmcjet = compute_energy_map(mcmc_jet)
+
+    fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+
+    # Left plot: Data jet map
+    ax = axes[0]
+    im = ax.imshow(
+        energies_datajet.T,
+        origin="lower",
+        extent=[vmin, vmax, vmin, vmax],
+        aspect="auto",
+        cmap="plasma"
+    )
+    ax.set_title("Energy map around DATA jet")
+    ax.set_xlabel(f"Feature {f1}")
+    ax.set_ylabel(f"Feature {f2}")
+    fig.colorbar(im, ax=ax, label="Energy")
+
+    # Right plot: MCMC jet map
+    ax = axes[1]
+    im = ax.imshow(
+        energies_mcmcjet.T,
+        origin="lower",
+        extent=[vmin, vmax, vmin, vmax],
+        aspect="auto",
+        cmap="plasma"
+    )
+    ax.set_title("Energy map around MCMC jet")
+    ax.set_xlabel(f"Feature {f1}")
+    fig.colorbar(im, ax=ax, label="Energy")
+
+    if n_chains_to_plot > 0:
         try:
-            chains = model.run_mcmc(x=init_x, all_steps=True).detach().cpu().numpy()
+            # apply greedy selector on buffer jets for visual separation
+            bx = buffer_tensor[:, f1].detach().cpu().numpy()
+            by = buffer_tensor[:, f2].detach().cpu().numpy()
+            start_idxs = select_initial_indices(bx, by, n_chains_to_plot, d_min)
+
+            if len(start_idxs) > 0:
+                init_x = buffer_tensor[start_idxs]
+
+                chains = model.run_mcmc(x=init_x, all_steps=True)
+                chains = chains.detach().cpu().numpy()
+
+                for i in range(min(n_chains_to_plot, chains.shape[0])):
+                    traj = chains[i]
+                    f1_vals = traj[f1, :]
+                    f2_vals = traj[f2, :]
+                    ax.plot(f1_vals, f2_vals, "-", color="white", markersize=4, linewidth=1.5)
+                    ax.plot(f1_vals, f2_vals, "o", color="white", markersize=3, markeredgecolor="black", markeredgewidth=0.5)
+                    ax.plot(f1_vals[0],  f2_vals[0],  "o", color="yellow", markersize=5, markeredgecolor="black")
+                    ax.plot(f1_vals[-1], f2_vals[-1], "o", color="cyan",   markersize=5, markeredgecolor="black")
+
+            else:
+                print("[WARNING] select_initial_indices failed to produce valid start points.")
+
         except Exception as e:
-            warnings.warn(f"Failed to run_mcmc for selected init_x: {e}")
-            chains = None
+            print(f"[WARNING] Failed to overlay MCMC chains: {e}")
 
-        if chains is not None:
-            for i in range(min(n_chains_to_plot, chains.shape[0])):
-                traj = chains[i]
-                f1_vals = traj[f1, :]
-                f2_vals = traj[f2, :]
-                if i == 0:
-                    ax.plot(f1_vals, f2_vals, "ko-", markersize=4, linewidth=1., label="MCMC steps")
-                    ax.plot(f1_vals[0], f2_vals[0], "ro", markersize=4, label="Initial samples")
-                    ax.plot(f1_vals[-1], f2_vals[-1], "bo", markersize=4, label="Final samples")
-                else:
-                    ax.plot(f1_vals, f2_vals, "ko-", markersize=4, linewidth=1.)
-                    ax.plot(f1_vals[0], f2_vals[0], "ro", markersize=4)
-                    ax.plot(f1_vals[-1], f2_vals[-1], "bo", markersize=4)
-
-    ax.legend()
     plt.tight_layout()
+
     outpath = os.path.join(savedir, "reco_energy_map_mcmc.png")
     plt.savefig(outpath, dpi=200)
     plt.close()
     print(f"[INFO] Saved {outpath}")
+
 
 def make_summary_plots(
     bkg_mses,
@@ -466,6 +590,7 @@ def make_summary_plots(
             )
             savefig = os.path.join(savedir, "plots", f"{name}.png")
             fig_local.savefig(savefig, dpi=200, bbox_inches=new_extent)
+            #fig_local.savefig(savefig.replace(".png",".pdf"), dpi=200, bbox_inches=new_extent)
             print(f"[INFO] Saved {savefig}")
             summary["plots"].append(f"{name}.png")
 
@@ -491,7 +616,6 @@ def run_full_evaluation(
     """
     Run the full evaluation chain. Returns a summary dict containing computed metrics and saved paths.
     """
-    # Resolve device
     device_t = torch.device(device)
 
     # Load model configuration
@@ -501,6 +625,7 @@ def run_full_evaluation(
     INPUT_DIM = model_config["input_dim"]
     SAVEDIR = savedir or model_config["savedir"]
     BKG_NAME = model_config["process"]
+    PCA_FILE = model_config["pca"] if "pca" in model_config else None
 
     if wnae_params is None:
         WNAE_PARAMS = WNAE_PARAM_PRESETS["DEFAULT_WNAE_PARAMS"]
@@ -515,7 +640,7 @@ def run_full_evaluation(
 
     # Background dataset and loader
     bkg_path = config[BKG_NAME]["path"]
-    bkg_dataset = load_dataset(bkg_path, input_dim=INPUT_DIM, max_jets=max_jets, pt_cut=pt_cut)
+    bkg_dataset = load_dataset(bkg_path, input_dim=INPUT_DIM, max_jets=max_jets, pt_cut=pt_cut,pca_file=PCA_FILE)
     bkg_loader = DataLoader(bkg_dataset, batch_size=batch_size, sampler=SequentialSampler(bkg_dataset))
 
     # Signals
@@ -523,15 +648,15 @@ def run_full_evaluation(
     for name, sample in config.items():
         if name == BKG_NAME:
             continue
-        sig_dataset = load_dataset(sample["path"], input_dim=INPUT_DIM, max_jets=max_jets, pt_cut=pt_cut)
+        sig_dataset = load_dataset(sample["path"], input_dim=INPUT_DIM, max_jets=max_jets, pt_cut=pt_cut,pca_file=PCA_FILE)
         signal_loaders[name] = DataLoader(sig_dataset, batch_size=batch_size, sampler=SequentialSampler(sig_dataset))
 
     # Instantiate model and load checkpoint
     model = WNAE(encoder=model_config["encoder"](), decoder=model_config["decoder"](), **WNAE_PARAMS)
     if not os.path.exists(checkpoint_path):
         raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
-    checkpoint = torch.load(checkpoint_path, map_location=device_t)
-    model.load_state_dict(torch.load(checkpoint_path, map_location=device_t)["model_state_dict"])
+    checkpoint = torch.load(checkpoint_path, map_location=device_t,weights_only=False)
+    model.load_state_dict(checkpoint["model_state_dict"])
     model.to(device_t)
     model.eval()
 
@@ -550,13 +675,13 @@ def run_full_evaluation(
         warnings.warn("No replay buffer found in checkpoint.")
 
     savedir_plots = os.path.join(SAVEDIR, "plots")
-
+    plot_latent_dimension_activity(model, bkg_loader, savedir_plots, device=device_t)
     summary = {"savedir": SAVEDIR, "plots": [], "aucs": {}}
 
     if generate_all_plots:
         # Energy map with MCMC
         try:
-            plot_reco_map_with_mcmc(model, savedir=savedir_plots, feature_idx=(0, 1), n_chains_to_plot=5, value_range=(-3, 3), device=device_t)
+            plot_reco_map_with_mcmc(model, bkg_loader, savedir=savedir_plots, feature_idx=(0, 1), n_chains_to_plot=5, value_range=(-4, 4), device=device_t)
             summary["plots"].append("reco_energy_map_mcmc.png")
         except Exception as e:
             warnings.warn(f"plot_reco_map_with_mcmc failed: {e}")
@@ -621,7 +746,7 @@ def _parse_args():
     parser.add_argument("--model-name", "-m", required=True, help="Model name (must exist in MODEL_REGISTRY)")
     parser.add_argument("--config", "-C", default="data/dataset_config_small.json", help="Dataset config JSON")
     parser.add_argument("--device", "-d", default="cpu", help="Device string (e.g. cpu or cuda:0)")
-    parser.add_argument("--batch-size", type=int, default=2048)
+    parser.add_argument("--batch-size", type=int, default=4096)
     parser.add_argument("--max-jets", type=int, default=20000)
     parser.add_argument("--pt-cut", type=float, default=None)
     parser.add_argument("--no-plots", action="store_true", help="If set, skip plot generation (only compute mses/aucs)")

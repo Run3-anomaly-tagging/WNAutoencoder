@@ -15,8 +15,35 @@ import json
 import time 
 from evaluate_wnae import run_full_evaluation 
 
+def compute_1d_projection_distance(pos_samples, neg_samples, bins=50, value_range=(-4, 4)):
+    """Compute a distance between 1D histograms of positive and negative samples.
 
-def run_training(model, optimizer, loss_function, n_epochs, training_loader, validation_loader,  plot_config, checkpoint_path=None,save_every=20, device=torch.device("cpu")):
+    Args:
+        pos_samples: Tensor (n_samples, n_features)
+        neg_samples: Tensor (n_samples, n_features)
+        bins: number of bins for histograms
+        value_range: tuple (min, max) for histogram bins
+
+    Returns:
+        dict of per-feature distances
+    """
+    if(pos_samples.shape[0]!=neg_samples.shape[0]):
+        print(f"WARNING:compute_1d_projection_distance sample sizes - {pos_samples.shape[0]} and {neg_samples.shape[0]}")
+        n_samples = min(pos_samples.shape[0], neg_samples.shape[0])
+    else:
+        n_samples = pos_samples.shape[0]
+    pos = pos_samples[:n_samples].detach().cpu().numpy()
+    neg = neg_samples[:n_samples].detach().cpu().numpy()
+
+    distances = {}
+    nfeat = pos.shape[1]
+    for f in range(nfeat):
+        h_pos, _ = np.histogram(pos[:, f], bins=bins, range=value_range, density=True)
+        h_neg, _ = np.histogram(neg[:, f], bins=bins, range=value_range, density=True)
+        distances[f] = np.sum(np.abs(h_pos - h_neg))
+    return np.mean(list(distances.values()))
+
+def run_training(model, optimizer, loss_function, n_epochs, training_loader, validation_loader,  plot_config, checkpoint_path=None,save_every=20, device=torch.device("cpu"),lr_factor=None, lr_patience=10, lr_min=1e-6,force_lr=None):
 
     start_epoch = 0
     training_losses, validation_losses = [], []
@@ -24,11 +51,19 @@ def run_training(model, optimizer, loss_function, n_epochs, training_loader, val
     epoch_pos_energies = []
     epoch_neg_energies = []
 
+    scheduler = None
+    if lr_factor is not None:
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=lr_factor, patience=lr_patience, min_lr=lr_min)
+
+
     if checkpoint_path and os.path.exists(checkpoint_path):
         print(f"Loading checkpoint from {checkpoint_path}")
-        ckpt = torch.load(checkpoint_path, map_location=device)
+        ckpt = torch.load(checkpoint_path, map_location=device, weights_only=False)
         model.load_state_dict(ckpt["model_state_dict"])
         optimizer.load_state_dict(ckpt["optimizer_state_dict"])
+        if force_lr is not None:
+            optimizer.param_groups[0]["lr"] = force_lr
+            print(f"Forced LR = {force_lr}")
         start_epoch = ckpt.get("epoch", 0)
         training_losses = ckpt.get("training_losses", [])
         validation_losses = ckpt.get("validation_losses", [])
@@ -66,20 +101,21 @@ def run_training(model, optimizer, loss_function, n_epochs, training_loader, val
                 loss, train_dict = model.train_step(x)
             elif loss_function == "nae":
                 loss, train_dict = model.train_step_nae(x)
+            elif loss_function == "cnae":
+                loss, train_dict = model.train_step_cnae(x)
             elif loss_function == "ae":
                 loss, train_dict = model.train_step_ae(x, run_mcmc=True, mcmc_replay=True)
 
             loss.backward()
             optimizer.step()
 
-            pos_e = train_dict.get("positive_energy", None)
-            neg_e = train_dict.get("negative_energy", None)
+            pos_e = train_dict.get("positive_energy", 0)
+            neg_e = train_dict.get("negative_energy", 0)
             batch_pos_energies.append(pos_e)
             batch_neg_energies.append(neg_e)
             epoch_pos_energy = epoch_pos_energy + pos_e
             epoch_neg_energy = epoch_neg_energy + neg_e
 
-            #print(f"E+: {train_dict['positive_energy']:.2f}, E-: {train_dict['negative_energy']:.2f}")
 
             training_loss += train_dict["loss"]
             n_batches += 1
@@ -93,6 +129,9 @@ def run_training(model, optimizer, loss_function, n_epochs, training_loader, val
         # Validation
         model.eval()
         validation_loss = 0
+        val_pos_energy = 0
+        val_neg_energy = 0
+        val_proj_distance = 0
         n_batches = 0
         #with torch.no_grad():
         for batch in validation_loader:
@@ -102,10 +141,20 @@ def run_training(model, optimizer, loss_function, n_epochs, training_loader, val
                 val_dict = model.validation_step(x)
             elif loss_function == "nae":
                 val_dict = model.validation_step_nae(x)
+            elif loss_function == "cnae":
+                val_dict = model.validation_step_cnae(x)
             elif loss_function == "ae":
                 val_dict = model.validation_step_ae(x, run_mcmc=True)
             validation_loss += val_dict["loss"]
-    
+
+            val_pos_energy += val_dict.get("positive_energy", 0)
+            val_neg_energy += val_dict.get("negative_energy", 0)
+
+            # Compute projection distance for monitoring (first batch only)
+            pos_samples = x
+            neg_samples = val_dict["mcmc_data"]["samples"][-1]
+            val_proj_distance += compute_1d_projection_distance(pos_samples, neg_samples)
+
             if(n_batches==0 and plot_config["plot_distributions"]==True and (i_epoch+1 in plot_epochs)):
                 #Plotting features, positive and negative samples, only for first batch
                 mcmc = val_dict["mcmc_data"]["samples"][-1].detach().cpu().numpy()
@@ -125,17 +174,34 @@ def run_training(model, optimizer, loss_function, n_epochs, training_loader, val
                 plot_epoch_2d(data, mcmc, ep_dir, i_epoch+1, pairs)
             
             n_batches += 1
+    
+        val_proj_distance =  val_proj_distance / n_batches
+        val_pos_energy = val_pos_energy / n_batches
+        val_neg_energy = val_neg_energy / n_batches
+
+        if scheduler is not None:
+            scheduler.step(validation_loss / n_batches)            
 
         validation_losses.append(validation_loss / n_batches)
+
         epoch_time = time.time() - epoch_start_time
         print(f"Epoch {i_epoch+1}/{start_epoch + n_epochs} | "
           f"Train Loss: {training_losses[-1]:.4f} | "
           f"Val Loss: {validation_losses[-1]:.4f} | "
-          f"Avg E+: {avg_pos_energy:.2f} | Avg E-: {avg_neg_energy:.2f} | "
+          f"E+: {avg_pos_energy:.2f} | E-: {avg_neg_energy:.2f} | "
+          f"Val E+: {val_pos_energy:.2f} | Val E-: {val_neg_energy:.2f} | "
+          f"Val proj. distance: {val_proj_distance:.2f} | "
+          f"LR: {optimizer.param_groups[0]['lr']:.3e} | "
           f"Time: {epoch_time:.1f}s")
 
-        save_epoch = i_epoch%save_every==0 or (start_epoch + n_epochs -1 == i_epoch)
-        if checkpoint_path and save_epoch:
+        if (start_epoch + n_epochs -1 == i_epoch):
+            save_path = checkpoint_path
+        elif(i_epoch%save_every==0):
+            save_path = checkpoint_path.replace(".pth",f"_epoch_{i_epoch}.pth")
+        else:
+            save_path = None
+
+        if save_path:
             torch.save({
                 "epoch": i_epoch + 1,
                 "model_state_dict": model.state_dict(),
@@ -143,11 +209,12 @@ def run_training(model, optimizer, loss_function, n_epochs, training_loader, val
                 "training_losses": training_losses,
                 "validation_losses": validation_losses,
                 "batch_pos_energies": batch_pos_energies,
+                "val_proj_dist": val_proj_distance,
                 "batch_neg_energies": batch_neg_energies,
                 "epoch_pos_energies": epoch_pos_energies,
                 "epoch_neg_energies": epoch_neg_energies,
                 "buffer": model.buffer.buffer
-            }, checkpoint_path)
+            }, save_path)
 
     return training_losses, validation_losses, epoch_pos_energies, epoch_neg_energies
 
@@ -168,24 +235,33 @@ def plot_losses(training_losses, validation_losses, save_dir):
 def main():
     # ------------------- Config ------------------- #
 
-    MODEL_NAME = "shallow16_encoder128_qcd"
+    MODEL_NAME = "deep_bottleneck_qcd"
     model_config = MODEL_REGISTRY[MODEL_NAME]
-    CONFIG_PATH = "data/dataset_config_small.json"
+    CONFIG_PATH = "data/dataset_config.json"
     DATA_PATH = json.load(open(CONFIG_PATH))[model_config["process"]]["path"]
     #DATA_PATH = json.load(open("data/dataset_config_alt.json"))[model_config["process"]]["path"]
     INPUT_DIM = model_config["input_dim"]
-    SAVEDIR = model_config["savedir"]+"_sinkhorn"
-    CHECKPOINT_PATH = f"{SAVEDIR}/wnae_checkpoint_{INPUT_DIM}.pth"
-    PLOT_DIR = f"{SAVEDIR}/plots/"
-    BATCH_SIZE = 2048
+    BATCH_SIZE = 4096
     NUM_SAMPLES = 2 ** 16
-    LEARNING_RATE = 1e-3
-    N_EPOCHS = 1
+    LEARNING_RATE = 1e-4
+    FORCE_LR = None #Overwrites LR instead of loading from checkpoint
+    LR_PLATEAU_FACTOR = 0.8
+    N_EPOCHS = 50
+    LOSS_FUNCTION = "wnae"
+    #LOSS_FUNCTION = "ae"
+    #LOSS_FUNCTION = "nae"
+    DISTANCE = "sliced_wasserstein"
+    WNAE_PRESET = "CFG5"
+    SAVEDIR = model_config["savedir"]+f"_{LOSS_FUNCTION}_{WNAE_PRESET}"
+    CHECKPOINT_PATH = f"{SAVEDIR}/checkpoint.pth"
+    PLOT_DIR = f"{SAVEDIR}/plots/"
+    PCA_FILE = model_config["pca"] if "pca" in model_config else None
+    
 
     #To plot pos. and neg. distributions during training
     plot_config = {
     "plot_distributions": True,
-    "plot_epochs": [100],
+    "plot_epochs": [],
     "bins": np.linspace(-5.0, 5.0, 101),
     "n_1d_samples": 2,
     "n_2d_samples": 1,
@@ -193,10 +269,11 @@ def main():
     "plot_dir": PLOT_DIR
     }
 
-    WNAE_PARAMS = WNAE_PARAM_PRESETS["TUTORIAL_WNAE_PARAMS"]
-    WNAE_PARAMS["distance"] = "sinkhorn"
-    DEVICE = torch.device("cpu")
-    #DEVICE = torch.device("cuda")
+    DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    WNAE_PARAMS = WNAE_PARAM_PRESETS[WNAE_PRESET]
+    WNAE_PARAMS["device"] = DEVICE
+    WNAE_PARAMS["distance"] = DISTANCE
+
     # -------------------  ------------------- #
 
     dataset = JetDataset(DATA_PATH)
@@ -209,8 +286,8 @@ def main():
     split = int(0.8 * len(indices))
     train_idx, val_idx = indices[:split], indices[split:]
 
-    train_dataset = JetDataset(DATA_PATH, indices=train_idx, input_dim=INPUT_DIM)
-    val_dataset = JetDataset(DATA_PATH, indices=val_idx, input_dim=INPUT_DIM)
+    train_dataset = JetDataset(DATA_PATH, indices=train_idx, input_dim=INPUT_DIM,pca_components=PCA_FILE)
+    val_dataset = JetDataset(DATA_PATH, indices=val_idx, input_dim=INPUT_DIM,pca_components=PCA_FILE)
 
     train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, sampler=RandomSampler(train_dataset, replacement=True, num_samples=NUM_SAMPLES),pin_memory=True)
     val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, sampler=RandomSampler(val_dataset, replacement=True, num_samples=NUM_SAMPLES),pin_memory=True)
@@ -223,7 +300,7 @@ def main():
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE)
 
-    training_losses, validation_losses, _, _ = run_training(model=model,optimizer=optimizer,loss_function="wnae",n_epochs=N_EPOCHS,training_loader=train_loader,validation_loader=val_loader,checkpoint_path=CHECKPOINT_PATH, plot_config=plot_config, device=DEVICE)
+    training_losses, validation_losses, _, _ = run_training(model=model,optimizer=optimizer,loss_function=LOSS_FUNCTION,n_epochs=N_EPOCHS,training_loader=train_loader,validation_loader=val_loader,checkpoint_path=CHECKPOINT_PATH, plot_config=plot_config, device=DEVICE,lr_factor=LR_PLATEAU_FACTOR,force_lr=FORCE_LR)
     plot_losses(training_losses, validation_losses, PLOT_DIR)
 
     print("\n[INFO] Starting full evaluation of trained checkpoint...")
@@ -235,7 +312,8 @@ def main():
             device=str(DEVICE),
             batch_size=BATCH_SIZE,
             wnae_params=WNAE_PARAMS,
-            generate_all_plots=True
+            generate_all_plots=True,
+            savedir=SAVEDIR
         )
         print(json.dumps(summary, indent=2))
     except Exception as e:
