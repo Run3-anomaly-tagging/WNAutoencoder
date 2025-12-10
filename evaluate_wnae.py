@@ -2,6 +2,7 @@ import os
 import json
 import argparse
 import warnings
+import sys
 from typing import Dict, Any
 
 import numpy as np
@@ -604,7 +605,7 @@ def make_summary_plots(
 def run_full_evaluation(
     checkpoint_path: str,
     model_name: str,
-    config_path: str = "data/dataset_config_small.json",
+    config_path: str = "data/dataset_config.json",
     device: str = "cpu",
     batch_size: int = 2048,
     max_jets: int = 20000,
@@ -616,31 +617,63 @@ def run_full_evaluation(
     """
     Run the full evaluation chain. Returns a summary dict containing computed metrics and saved paths.
     """
+    # Add project root to path if needed
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    project_root = script_dir
+    if project_root not in sys.path:
+        sys.path.insert(0, project_root)
+    
     device_t = torch.device(device)
 
     # Load model configuration
     if model_name not in MODEL_REGISTRY:
-        raise KeyError(f"Model name {model_name} not found in MODEL_REGISTRY.")
+        available = ", ".join(MODEL_REGISTRY.keys())
+        raise KeyError(f"Model name '{model_name}' not found in MODEL_REGISTRY.\nAvailable: {available}")
+    
     model_config = MODEL_REGISTRY[model_name]
     INPUT_DIM = model_config["input_dim"]
-    SAVEDIR = savedir or model_config["savedir"]
+    SAVEDIR = savedir or os.path.join(project_root, "models", model_config["savedir"])
     BKG_NAME = model_config["process"]
-    PCA_FILE = model_config["pca"] if "pca" in model_config else None
+    PCA_FILE = model_config.get("pca", None)
+    
+    if PCA_FILE and not os.path.isabs(PCA_FILE):
+        PCA_FILE = os.path.join(project_root, PCA_FILE)
 
     if wnae_params is None:
-        WNAE_PARAMS = WNAE_PARAM_PRESETS["DEFAULT_WNAE_PARAMS"]
+        WNAE_PARAMS = WNAE_PARAM_PRESETS["DEFAULT_WNAE_PARAMS"].copy()
     else:
-        WNAE_PARAMS = wnae_params
+        WNAE_PARAMS = wnae_params.copy()
+    
+    WNAE_PARAMS["device"] = device_t
 
     os.makedirs(os.path.join(SAVEDIR, "plots"), exist_ok=True)
+
+    # Validate paths
+    if not os.path.isabs(config_path):
+        config_path = os.path.join(project_root, config_path)
+    
+    if not os.path.exists(config_path):
+        raise FileNotFoundError(f"Dataset config not found: {config_path}")
+    
+    if not os.path.exists(checkpoint_path):
+        raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
 
     # Load dataset config
     with open(config_path, "r") as f:
         config = json.load(f)
+    
+    if BKG_NAME not in config:
+        available = ", ".join(config.keys())
+        raise KeyError(f"Background process '{BKG_NAME}' not found in {config_path}.\nAvailable: {available}")
 
     # Background dataset and loader
     bkg_path = config[BKG_NAME]["path"]
-    bkg_dataset = load_dataset(bkg_path, input_dim=INPUT_DIM, max_jets=max_jets, pt_cut=pt_cut,pca_file=PCA_FILE)
+    
+    if not os.path.exists(bkg_path):
+        raise FileNotFoundError(f"Background dataset not found: {bkg_path}\nCheck paths in {config_path}")
+    
+    print(f"[INFO] Loading background: {BKG_NAME} from {bkg_path}")
+    bkg_dataset = load_dataset(bkg_path, input_dim=INPUT_DIM, max_jets=max_jets, pt_cut=pt_cut, pca_file=PCA_FILE)
     bkg_loader = DataLoader(bkg_dataset, batch_size=batch_size, sampler=SequentialSampler(bkg_dataset))
 
     # Signals
@@ -648,14 +681,21 @@ def run_full_evaluation(
     for name, sample in config.items():
         if name == BKG_NAME:
             continue
-        sig_dataset = load_dataset(sample["path"], input_dim=INPUT_DIM, max_jets=max_jets, pt_cut=pt_cut,pca_file=PCA_FILE)
+        
+        sig_path = sample["path"]
+        if not os.path.exists(sig_path):
+            warnings.warn(f"Signal dataset not found: {sig_path}. Skipping {name}.")
+            continue
+        
+        print(f"[INFO] Loading signal: {name} from {sig_path}")
+        sig_dataset = load_dataset(sig_path, input_dim=INPUT_DIM, max_jets=max_jets, pt_cut=pt_cut, pca_file=PCA_FILE)
         signal_loaders[name] = DataLoader(sig_dataset, batch_size=batch_size, sampler=SequentialSampler(sig_dataset))
 
     # Instantiate model and load checkpoint
+    print(f"[INFO] Loading model: {model_name}")
     model = WNAE(encoder=model_config["encoder"](), decoder=model_config["decoder"](), **WNAE_PARAMS)
-    if not os.path.exists(checkpoint_path):
-        raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
-    checkpoint = torch.load(checkpoint_path, map_location=device_t,weights_only=False)
+    
+    checkpoint = torch.load(checkpoint_path, map_location=device_t, weights_only=False)
     model.load_state_dict(checkpoint["model_state_dict"])
     model.to(device_t)
     model.eval()
@@ -665,7 +705,7 @@ def run_full_evaluation(
         stored_buffer = checkpoint["buffer"]
         try:
             if model.buffer.max_samples != len(stored_buffer):
-                warnings.warn(f"Stored buffer len ({len(stored_buffer)}) different from declared buffer size {model.buffer.max_samples}. Truncating/using prefix.")
+                warnings.warn(f"Stored buffer len ({len(stored_buffer)}) != declared size {model.buffer.max_samples}. Using prefix.")
                 model.buffer.buffer = stored_buffer[:model.buffer.max_samples]
             else:
                 model.buffer.buffer = stored_buffer

@@ -4,15 +4,21 @@ import numpy as np
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 from torch.utils.data import DataLoader, RandomSampler
+import os, random, sys
+import itertools
+import json
+import time
+
+# Add project root to path
+script_dir = os.path.dirname(os.path.abspath(__file__))
+project_root = script_dir  # train.py is at project root
+sys.path.insert(0, project_root)
+
 from utils.jet_dataset import JetDataset
 from wnae import WNAE
 from model_config.model_registry import MODEL_REGISTRY
 from model_config.model_config import WNAE_PARAM_PRESETS
-import os, random
 from utils.plotting_helpers import ensure_dir, plot_epoch_1d, plot_epoch_2d
-import itertools
-import json
-import time 
 from evaluate_wnae import run_full_evaluation 
 
 def compute_1d_projection_distance(pos_samples, neg_samples, bins=50, value_range=(-4, 4)):
@@ -237,44 +243,75 @@ def main():
 
     MODEL_NAME = "deep_bottleneck_qcd"
     model_config = MODEL_REGISTRY[MODEL_NAME]
-    CONFIG_PATH = "data/dataset_config.json"
-    DATA_PATH = json.load(open(CONFIG_PATH))[model_config["process"]]["path"]
-    #DATA_PATH = json.load(open("data/dataset_config_alt.json"))[model_config["process"]]["path"]
+    CONFIG_PATH = os.path.join(project_root, "data", "dataset_config.json")
+    
+    # Validate config file exists
+    if not os.path.exists(CONFIG_PATH):
+        raise FileNotFoundError(f"Dataset config not found: {CONFIG_PATH}")
+    
+    with open(CONFIG_PATH, "r") as f:
+        dataset_config = json.load(f)
+    
+    if model_config["process"] not in dataset_config:
+        raise KeyError(f"Process '{model_config['process']}' not found in {CONFIG_PATH}")
+    
+    DATA_PATH = dataset_config[model_config["process"]]["path"]
+    
+    # Validate data file exists
+    if not os.path.exists(DATA_PATH):
+        raise FileNotFoundError(f"Dataset file not found: {DATA_PATH}\nCheck dataset_config.json paths")
+    
     INPUT_DIM = model_config["input_dim"]
     BATCH_SIZE = 4096
     NUM_SAMPLES = 2 ** 16
     LEARNING_RATE = 1e-4
-    FORCE_LR = None #Overwrites LR instead of loading from checkpoint
+    FORCE_LR = None  # Overwrites LR instead of loading from checkpoint
     LR_PLATEAU_FACTOR = 0.8
     N_EPOCHS = 20
     LOSS_FUNCTION = "wnae"
-    #LOSS_FUNCTION = "ae"
-    #LOSS_FUNCTION = "nae"
     DISTANCE = "sliced_wasserstein"
     WNAE_PRESET = "CFG6"
-    SAVEDIR = model_config["savedir"]+f"_{LOSS_FUNCTION}_{WNAE_PRESET}"
-    CHECKPOINT_PATH = f"{SAVEDIR}/checkpoint.pth"
-    PLOT_DIR = f"{SAVEDIR}/plots/"
-    PCA_FILE = model_config["pca"] if "pca" in model_config else None
     
+    # Ensure models directory under project root
+    SAVEDIR = os.path.join(project_root, "models", f"{model_config['savedir']}_{LOSS_FUNCTION}_{WNAE_PRESET}")
+    CHECKPOINT_PATH = os.path.join(SAVEDIR, "checkpoint.pth")
+    PLOT_DIR = os.path.join(SAVEDIR, "plots")
+    PCA_FILE = model_config.get("pca", None)
+    
+    if PCA_FILE and not os.path.isabs(PCA_FILE):
+        PCA_FILE = os.path.join(project_root, PCA_FILE)
 
-    #To plot pos. and neg. distributions during training
+    # Plot configuration
     plot_config = {
-    "plot_distributions": True,
-    "plot_epochs": [],
-    "bins": np.linspace(-5.0, 5.0, 101),
-    "n_1d_samples": 2,
-    "n_2d_samples": 1,
-    "rng_seed": 0,
-    "plot_dir": PLOT_DIR
+        "plot_distributions": True,
+        "plot_epochs": [],  # Empty = only final epoch
+        "bins": np.linspace(-5.0, 5.0, 101),
+        "n_1d_samples": 2,
+        "n_2d_samples": 1,
+        "rng_seed": 0,
+        "plot_dir": PLOT_DIR
     }
 
     DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    WNAE_PARAMS = WNAE_PARAM_PRESETS[WNAE_PRESET]
+    WNAE_PARAMS = WNAE_PARAM_PRESETS[WNAE_PRESET].copy()
     WNAE_PARAMS["device"] = DEVICE
     WNAE_PARAMS["distance"] = DISTANCE
 
     # -------------------  ------------------- #
+    
+    print(f"\n{'='*60}")
+    print(f"Training Configuration")
+    print(f"{'='*60}")
+    print(f"Model: {MODEL_NAME}")
+    print(f"Process: {model_config['process']}")
+    print(f"Data: {DATA_PATH}")
+    print(f"Input dim: {INPUT_DIM}")
+    print(f"Loss function: {LOSS_FUNCTION}")
+    print(f"Distance: {DISTANCE}")
+    print(f"WNAE preset: {WNAE_PRESET}")
+    print(f"Device: {DEVICE}")
+    print(f"Save dir: {SAVEDIR}")
+    print(f"{'='*60}\n")
 
     dataset = JetDataset(DATA_PATH)
     ensure_dir(SAVEDIR)
@@ -286,12 +323,22 @@ def main():
     split = int(0.8 * len(indices))
     train_idx, val_idx = indices[:split], indices[split:]
 
-    train_dataset = JetDataset(DATA_PATH, indices=train_idx, input_dim=INPUT_DIM,pca_components=PCA_FILE)
-    val_dataset = JetDataset(DATA_PATH, indices=val_idx, input_dim=INPUT_DIM,pca_components=PCA_FILE)
+    train_dataset = JetDataset(DATA_PATH, indices=train_idx, input_dim=INPUT_DIM, pca_components=PCA_FILE)
+    val_dataset = JetDataset(DATA_PATH, indices=val_idx, input_dim=INPUT_DIM, pca_components=PCA_FILE)
 
-    train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, sampler=RandomSampler(train_dataset, replacement=True, num_samples=NUM_SAMPLES),pin_memory=True)
-    val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, sampler=RandomSampler(val_dataset, replacement=True, num_samples=NUM_SAMPLES),pin_memory=True)
-    print(f"Device is {DEVICE}")
+    train_loader = DataLoader(
+        train_dataset, 
+        batch_size=BATCH_SIZE, 
+        sampler=RandomSampler(train_dataset, replacement=True, num_samples=NUM_SAMPLES),
+        pin_memory=True
+    )
+    val_loader = DataLoader(
+        val_dataset, 
+        batch_size=BATCH_SIZE, 
+        sampler=RandomSampler(val_dataset, replacement=True, num_samples=NUM_SAMPLES),
+        pin_memory=True
+    )
+    
     model = WNAE(
         encoder=model_config["encoder"](),
         decoder=model_config["decoder"](),
@@ -300,7 +347,19 @@ def main():
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE)
 
-    training_losses, validation_losses, _, _ = run_training(model=model,optimizer=optimizer,loss_function=LOSS_FUNCTION,n_epochs=N_EPOCHS,training_loader=train_loader,validation_loader=val_loader,checkpoint_path=CHECKPOINT_PATH, plot_config=plot_config, device=DEVICE,lr_factor=LR_PLATEAU_FACTOR,force_lr=FORCE_LR)
+    training_losses, validation_losses, _, _ = run_training(
+        model=model,
+        optimizer=optimizer,
+        loss_function=LOSS_FUNCTION,
+        n_epochs=N_EPOCHS,
+        training_loader=train_loader,
+        validation_loader=val_loader,
+        checkpoint_path=CHECKPOINT_PATH, 
+        plot_config=plot_config, 
+        device=DEVICE,
+        lr_factor=LR_PLATEAU_FACTOR,
+        force_lr=FORCE_LR
+    )
     plot_losses(training_losses, validation_losses, PLOT_DIR)
 
     print("\n[INFO] Starting full evaluation of trained checkpoint...")
@@ -315,9 +374,12 @@ def main():
             generate_all_plots=True,
             savedir=SAVEDIR
         )
+        print("\n[INFO] Evaluation summary:")
         print(json.dumps(summary, indent=2))
     except Exception as e:
-        print(f"[WARN] Full evaluation failed: {e}")
+        print(f"[ERROR] Full evaluation failed: {e}")
+        import traceback
+        traceback.print_exc()
 
 if __name__ == "__main__":
     main()
