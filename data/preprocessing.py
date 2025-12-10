@@ -1,11 +1,19 @@
 import h5py
 import numpy as np
 import os
+import sys
 from tqdm import tqdm
 import matplotlib.pyplot as plt
 import torch
 import json
 import subprocess
+import argparse
+
+# Add project root to path for imports
+script_dir = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.dirname(script_dir)
+sys.path.insert(0, project_root)
+
 from utils.jet_dataset import JetDataset
 
 def inspect_h5(filepath):
@@ -169,7 +177,9 @@ def plot_feature_comparisons_bkg_vs_sig(h5_file, output_dir, key_bkg="Jets_Bkg",
         print(f"Saved {output_path}")
         plt.close()
 
-    os.makedirs(output_dir, exist_ok=True)
+    # Create output directory under results/
+    results_dir = os.path.join(project_root, "results", output_dir)
+    os.makedirs(results_dir, exist_ok=True)
 
     with h5py.File(h5_file, "r") as f:
         jets_bkg = f[key_bkg]
@@ -183,7 +193,7 @@ def plot_feature_comparisons_bkg_vs_sig(h5_file, output_dir, key_bkg="Jets_Bkg",
         for i in range(n_features):
             bkg_vals = bkg_hid[:, i]
             sig_vals = sig_hid[:, i]
-            output_path = os.path.join(output_dir, f"feature_{i}_comparison.png")
+            output_path = os.path.join(results_dir, f"feature_{i}_comparison.png")
             title = f"Feature {i} Distribution"
             plot_feature_comparison(bkg_vals, sig_vals, output_path, title=title)
 
@@ -217,7 +227,7 @@ def compute_stats_on_sample(h5file, dataset_name='Jets', sample_size=10000):
     stds = sample_hid.std(axis=0)
     return means, stds
 
-def scale_and_save(input_fp, output_fp, batch_size=1000):
+def scale_and_save(input_fp, output_fp, batch_size=1000, sample_size=10000):
     # Scale 'hidNeurons' features of all jets in input file to zero mean and unit variance, then save to output file.
     with h5py.File(input_fp, 'r') as fin:
         jets_in = fin['Jets']
@@ -255,7 +265,9 @@ def sanity_check_scaled_features(filepath, hist_dir="scaled_feature_histograms")
     # Perform sanity checks by sampling scaled features, printing statistics, and saving feature histograms.
     print(f"Running sanity check on scaled features from {filepath}")
     
-    os.makedirs(hist_dir, exist_ok=True)
+    # Save histograms under results/
+    results_hist_dir = os.path.join(project_root, "results", hist_dir)
+    os.makedirs(results_hist_dir, exist_ok=True)
     
     dataset = JetDataset(filepath)
     sample_indices = np.random.choice(len(dataset), size=10000, replace=False)
@@ -277,7 +289,7 @@ def sanity_check_scaled_features(filepath, hist_dir="scaled_feature_histograms")
 
         print(f"{i:>8} | {means[i]:>10.4f} | {stds[i]:>10.4f} | {mins[i]:>10.4f} | {maxs[i]:>10.4f}")
         print(f"    % within [-3,3]: {pct_within_3:.2f}%, [-4,4]: {pct_within_4:.2f}%, [-5,5]: {pct_within_5:.2f}%")
-        output_path = os.path.join(hist_dir, f"scaled_feature_{i:03d}.png")
+        output_path = os.path.join(results_hist_dir, f"scaled_feature_{i:03d}.png")
         title = f"Scaled Feature {i}"
         plot_feature(feature_vals,output_path,title=title,percentiles=[pct_within_3,pct_within_4,pct_within_5])
 
@@ -315,80 +327,201 @@ def apply_scaling_and_save(input_fp, output_fp, mean, std, keys=("Jets_Bkg", "Je
     print(f"[INFO] Scaling complete. Scaled datasets saved to: {output_fp}")
 
 
+def prompt_overwrite(filepath):
+    """Ask user whether to overwrite an existing file."""
+    if not os.path.exists(filepath):
+        return True
+    
+    while True:
+        response = input(f"[WARNING] File exists: {filepath}\n  Overwrite? [y/n/q]: ").lower().strip()
+        if response == 'y':
+            return True
+        elif response == 'n':
+            print(f"[INFO] Skipping {filepath}")
+            return False
+        elif response == 'q':
+            print("[INFO] Quitting...")
+            sys.exit(0)
+        else:
+            print("Invalid input. Please enter 'y', 'n', or 'q'.")
+
+def run_merge_qcd_ht_bins():
+    """Merge QCD HT bins with cross-section weighting."""
+    dataset_qcd_ht_path = os.path.join(script_dir, "dataset_qcd_ht.json")
+    output_path = os.path.join(script_dir, "QCD_merged.h5")
+    
+    if not prompt_overwrite(output_path):
+        return
+    
+    with open(dataset_qcd_ht_path, "r") as f:
+        dataset_config = json.load(f)
+    merge_qcd_ht_bins(dataset_config, output_path, key="Jets")
+
+def run_scale_merged_qcd():
+    """Scale merged QCD dataset to zero mean and unit variance."""
+    input_filepath = os.path.join(script_dir, "QCD_merged.h5")
+    output_filepath = os.path.join(script_dir, "QCD_merged_scaled.h5")
+    
+    if not os.path.exists(input_filepath):
+        print(f"[ERROR] Input file not found: {input_filepath}")
+        print("[INFO] Run merge_qcd_ht_bins first.")
+        return
+    
+    if not prompt_overwrite(output_filepath):
+        return
+    
+    batch_size = 20000
+    sample_size = 20000
+    scale_and_save(input_filepath, output_filepath, batch_size=batch_size, sample_size=sample_size)
+    
+    # Optional sanity check
+    check = input("Run sanity check on scaled features? [y/n]: ").lower().strip()
+    if check == 'y':
+        sanity_check_scaled_features(output_filepath)
+
+def run_split_tt_by_category():
+    """Split TTto4Q dataset by jet category (unm, qq, bq, bqq)."""
+    config_path = os.path.join(script_dir, "dataset_config.json")
+    with open(config_path, "r") as f:
+        dataset_config = json.load(f)
+    
+    tt_path = dataset_config["TTto4Q"]["path"]
+    
+    if not os.path.exists(tt_path):
+        print(f"[ERROR] Input file not found: {tt_path}")
+        return
+    
+    # Check if any output files already exist
+    base_name = os.path.basename(tt_path).replace(".h5", "")
+    category_names = ["unm", "qq", "bq", "bqq"]
+    existing_files = []
+    for cat_name in category_names:
+        out_fp = os.path.join(os.path.dirname(tt_path), f"{base_name}_{cat_name}.h5")
+        if os.path.exists(out_fp):
+            existing_files.append(out_fp)
+    
+    if existing_files:
+        print(f"[WARNING] Found {len(existing_files)} existing split files.")
+        if not prompt_overwrite(existing_files[0]):  # Representative check
+            return
+    
+    split_tt_by_category(input_fp=tt_path, key="Jets", category_field="category")
+
+def run_merge_qcd_tt():
+    """Merge QCD and TTto4Q datasets with specified ratio."""
+    config_path = os.path.join(script_dir, "dataset_config.json")
+    with open(config_path, "r") as f:
+        dataset_config = json.load(f)
+    
+    qcd_path = dataset_config["QCD"]["path"]
+    tt_path = dataset_config["TTto4Q"]["path"]
+    output_path = os.path.join(os.path.dirname(qcd_path), "qcd_tt_mixed.h5")
+    
+    if not os.path.exists(qcd_path) or not os.path.exists(tt_path):
+        print(f"[ERROR] Input files not found. QCD: {qcd_path}, TT: {tt_path}")
+        return
+    
+    if not prompt_overwrite(output_path):
+        return
+    
+    # Prompt for ratio
+    ratio_input = input("Enter TT/QCD ratio [default 1.0]: ").strip()
+    ratio = float(ratio_input) if ratio_input else 1.0
+    
+    merge_qcd_tt(qcd_fp=qcd_path, tt_fp=tt_path, output_fp=output_path, key="Jets", ratio=ratio)
+
+def run_apply_qcd_scaling_to_signals():
+    """Apply QCD scaling statistics to signal datasets."""
+    scaled_qcd_path = os.path.join(script_dir, "QCD_merged_scaled.h5")
+    
+    if not os.path.exists(scaled_qcd_path):
+        print(f"[ERROR] Scaled QCD file not found: {scaled_qcd_path}")
+        print("[INFO] Run scale_merged_qcd first.")
+        return
+    
+    with h5py.File(scaled_qcd_path, "r") as f:
+        mean = f["hidNeurons_means"][:]
+        std = f["hidNeurons_stds"][:]
+    
+    signal_files = ["GluGluHto2B", "svj", "Yto4Q", "TTto4Q", "ZJets800", "WJets800"]
+    
+    for file_base in signal_files:
+        input_filepath = os.path.join(script_dir, f"{file_base}.h5")
+        output_filepath = os.path.join(script_dir, f"{file_base}_scaled.h5")
+        
+        if not os.path.exists(input_filepath):
+            print(f"[WARNING] Signal file not found, skipping: {input_filepath}")
+            continue
+        
+        if not prompt_overwrite(output_filepath):
+            continue
+        
+        apply_scaling_and_save(input_filepath, output_filepath, mean, std, keys=["Jets"], batch_size=1000)
+
+def interactive_menu():
+    """Display interactive menu for preprocessing operations."""
+    operations = {
+        "1": ("Merge QCD HT bins", run_merge_qcd_ht_bins),
+        "2": ("Scale merged QCD dataset", run_scale_merged_qcd),
+        "3": ("Split TTto4Q by category", run_split_tt_by_category),
+        "4": ("Merge QCD + TTto4Q", run_merge_qcd_tt),
+        "5": ("Apply QCD scaling to signals", run_apply_qcd_scaling_to_signals),
+        "6": ("Inspect HDF5 file", lambda: inspect_h5(input("Enter filepath: ").strip())),
+    }
+    
+    while True:
+        print("\n" + "="*60)
+        print("Jet Dataset Preprocessing Menu")
+        print("="*60)
+        for key, (desc, _) in operations.items():
+            print(f"  {key}. {desc}")
+        print("  q. Quit")
+        print("="*60)
+        
+        choice = input("Select operation: ").strip().lower()
+        
+        if choice == 'q':
+            print("[INFO] Exiting...")
+            break
+        elif choice in operations:
+            try:
+                operations[choice][1]()
+            except Exception as e:
+                print(f"[ERROR] Operation failed: {e}")
+                import traceback
+                traceback.print_exc()
+        else:
+            print("[ERROR] Invalid choice. Please try again.")
+
 if __name__ == "__main__":
-
-    #Switches
-    merge_qcd_ht = False
-    scale_merged_qcd = False
-    scaling_sanity_check = False
-    apply_qcd_scaling_to_signal =False
-    split_tt_per_category = False
-    merge_qcd_tt_flag = False
-
-
-    if merge_qcd_ht:
-        with open("dataset_qcd_ht.json", "r") as f:
-            dataset_config = json.load(f)
-        merge_qcd_ht_bins(dataset_config, "QCD_merged.h5", key="Jets")
-
-    if scale_merged_qcd:
-        input_filepath = "QCD_merged.h5"
-        output_filepath = "QCD_merged_scaled.h5"
-        batch_size = 20000
-        sample_size = 20000 # for computing mean/std we don't need all jets
-
-        scale_and_save(input_filepath, output_filepath, batch_size=batch_size)
-        if scaling_sanity_check:
-            sanity_check_scaled_features(output_filepath)
-
-    if split_tt_per_category:
-        config_path = "dataset_config.json"
-        with open(config_path, "r") as f:
-            dataset_config = json.load(f)
-
-        qcd_path = dataset_config["QCD"]["path"]
-        tt_path = dataset_config["TTto4Q"]["path"]
+    parser = argparse.ArgumentParser(description="Jet dataset preprocessing utilities")
+    parser.add_argument("--interactive", action="store_true", help="Run interactive menu")
+    parser.add_argument("--inspect", type=str, help="Inspect an HDF5 file")
+    parser.add_argument("--merge-qcd-ht", action="store_true", help="Merge QCD HT bins")
+    parser.add_argument("--scale-qcd", action="store_true", help="Scale merged QCD")
+    parser.add_argument("--split-tt", action="store_true", help="Split TTto4Q by category")
+    parser.add_argument("--merge-qcd-tt", action="store_true", help="Merge QCD and TT")
+    parser.add_argument("--scale-signals", action="store_true", help="Apply QCD scaling to signals")
     
-        #This is for debugging
-        #inspect_h5("svj.h5")
-        #inspect_h5("TTto4Q.h5")
-        #inspect_h5("TTto4Q_scaled.h5")
+    args = parser.parse_args()
     
-        split_tt_by_category(input_fp=tt_path, key="Jets", category_field="category")
-
-    if merge_qcd_tt_flag:
-        merge_qcd_tt(qcd_fp=qcd_path, tt_fp=tt_path, output_fp=os.path.join(os.path.dirname(qcd_path), "qcd_tt_mixed.h5"), key="Jets", ratio=1.0)
-
-
-    if  apply_qcd_scaling_to_signal:
-        # Load precomputed mean and std from the scaled training file to apply the same scaling elsewhere.
-        with h5py.File(output_filepath, "r") as f:
-            mean = f["hidNeurons_means"][:]
-            std = f["hidNeurons_stds"][:]
-
-        input_filepath = "GluGluHto2B.h5"
-        output_filepath = "GluGluHto2B_scaled.h5"
-        apply_scaling_and_save(input_filepath, output_filepath, mean, std, keys=["Jets"], batch_size=1000)
-
-        input_filepath = "svj.h5"
-        output_filepath = "svj_scaled.h5"
-        apply_scaling_and_save(input_filepath, output_filepath, mean, std, keys=["Jets"], batch_size=1000)
-
-        input_filepath = "Yto4Q.h5"
-        output_filepath = "Yto4Q_scaled.h5"
-        apply_scaling_and_save(input_filepath, output_filepath, mean, std, keys=["Jets"], batch_size=1000)
-
-        input_filepath = "TTto4Q.h5"
-        output_filepath = "TTto4Q_scaled.h5"
-        apply_scaling_and_save(input_filepath, output_filepath, mean, std, keys=["Jets"], batch_size=1000)
-
-        input_filepath = "ZJets800.h5"
-        output_filepath = "ZJets800_scaled.h5"
-        apply_scaling_and_save(input_filepath, output_filepath, mean, std, keys=["Jets"], batch_size=1000)
-
-
-        input_filepath = "WJets800.h5"
-        output_filepath = "WJets800_scaled.h5"
-        apply_scaling_and_save(input_filepath, output_filepath, mean, std, keys=["Jets"], batch_size=1000)
+    # If no arguments provided, run interactive menu
+    if len(sys.argv) == 1:
+        interactive_menu()
+    else:
+        if args.inspect:
+            inspect_h5(args.inspect)
+        if args.merge_qcd_ht:
+            run_merge_qcd_ht_bins()
+        if args.scale_qcd:
+            run_scale_merged_qcd()
+        if args.split_tt:
+            run_split_tt_by_category()
+        if args.merge_qcd_tt:
+            run_merge_qcd_tt()
+        if args.scale_signals:
+            run_apply_qcd_scaling_to_signals()
+        if args.interactive:
+            interactive_menu()
 
 
