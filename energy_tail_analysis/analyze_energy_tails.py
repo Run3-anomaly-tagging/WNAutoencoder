@@ -31,6 +31,11 @@ from model_config.model_config import WNAE_PARAM_PRESETS
 # Configuration
 # ============================================================================
 
+# Debug mode: Set to True to process only a subset of data
+DEBUG_MODE = False  # Set to True for faster debugging
+MAX_DEBUG_SAMPLES = 5000  # Number of validation samples to process in debug mode
+MAX_DEBUG_BATCHES = 5  # Maximum batches to process (alternative limit)
+
 MODEL_NAME = "deep_bottleneck_qcd"
 WNAE_PRESET = "CFG1"
 CHECKPOINT_PATH = "../models/deep_bottleneck_qcd_wnae_CFG1/checkpoint.pth"
@@ -42,7 +47,7 @@ BATCH_SIZE = 2048
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # Percentile thresholds for analysis
-TAIL_PERCENTILES = [80, 90]
+TAIL_PERCENTILES = [80]  # Changed from [80, 90]
 CORE_PERCENTILE = 50
 
 # ============================================================================
@@ -132,8 +137,16 @@ def compute_energies_batched(model, dataset, batch_size=2048):
     all_samples = []
     
     print("Computing energies for validation set...")
+    if DEBUG_MODE:
+        print(f"[DEBUG MODE] Processing max {MAX_DEBUG_BATCHES} batches or {MAX_DEBUG_SAMPLES} samples")
+    
     with torch.no_grad():
-        for batch in tqdm(dataloader):
+        for batch_idx, batch in enumerate(tqdm(dataloader)):
+            # Debug mode: stop after processing enough batches
+            if DEBUG_MODE and batch_idx >= MAX_DEBUG_BATCHES:
+                print(f"[DEBUG MODE] Stopped after {batch_idx} batches")
+                break
+            
             # Handle both tuple/list and tensor returns from dataloader
             if isinstance(batch, (list, tuple)):
                 batch = batch[0]
@@ -146,6 +159,13 @@ def compute_energies_batched(model, dataset, batch_size=2048):
     
     energies = torch.cat(all_energies).numpy()
     samples = torch.cat(all_samples).numpy()
+    
+    # Debug mode: further subsample if needed
+    if DEBUG_MODE and len(samples) > MAX_DEBUG_SAMPLES:
+        print(f"[DEBUG MODE] Subsampling from {len(samples)} to {MAX_DEBUG_SAMPLES} samples")
+        indices = np.random.choice(len(samples), MAX_DEBUG_SAMPLES, replace=False)
+        energies = energies[indices]
+        samples = samples[indices]
     
     return energies, samples
 
@@ -168,7 +188,7 @@ def get_negative_samples_and_energies(model):
 
 
 def identify_tail_and_core_jets(energies, samples, tail_percentiles, core_percentile):
-    """Identify jets in high-energy tail vs low-energy core."""
+    """Identify jets in high-energy tail vs low-energy core vs middle."""
     
     results = {}
     
@@ -194,6 +214,17 @@ def identify_tail_and_core_jets(energies, samples, tail_percentiles, core_percen
             'samples': samples[tail_mask],
             'energies': energies[tail_mask]
         }
+        
+        # Middle jets (between core and tail)
+        middle_mask = (energies >= core_threshold) & (energies <= tail_threshold)
+        results[f'middle_{percentile}'] = {
+            'lower_threshold': core_threshold,
+            'upper_threshold': tail_threshold,
+            'mask': middle_mask,
+            'indices': np.where(middle_mask)[0],
+            'samples': samples[middle_mask],
+            'energies': energies[middle_mask]
+        }
     
     print(f"\nEnergy statistics:")
     print(f"  Mean: {energies.mean():.4f}")
@@ -202,8 +233,10 @@ def identify_tail_and_core_jets(energies, samples, tail_percentiles, core_percen
     print(f"  Max: {energies.max():.4f}")
     print(f"\nCore (<{core_percentile}th percentile): {core_mask.sum()} jets, E < {core_threshold:.4f}")
     for percentile in tail_percentiles:
+        middle_mask = results[f'middle_{percentile}']['mask']
         tail_mask = results[f'tail_{percentile}']['mask']
         tail_threshold = results[f'tail_{percentile}']['threshold']
+        print(f"Middle ({core_percentile}-{percentile}th percentile): {middle_mask.sum()} jets, {core_threshold:.4f} < E < {tail_threshold:.4f}")
         print(f"Tail (>{percentile}th percentile): {tail_mask.sum()} jets, E > {tail_threshold:.4f}")
     
     return results
@@ -254,7 +287,10 @@ def compute_reconstruction_errors(model, samples):
     samples_tensor = torch.tensor(samples, dtype=torch.float32).to(DEVICE)
     
     with torch.no_grad():
-        reconstructed = model.reconstruct(samples_tensor)
+        # Encode and decode to get reconstruction
+        latent = model.encoder(samples_tensor)
+        reconstructed = model.decoder(latent)
+        
         mse_per_sample = ((samples_tensor - reconstructed) ** 2).mean(dim=1)
         mse_per_feature = ((samples_tensor - reconstructed) ** 2).mean(dim=0)
     
@@ -309,8 +345,8 @@ def plot_energy_distributions(pos_energies, neg_energies, tail_thresholds, outpu
     print(f"Saved: {output_path}")
 
 
-def plot_feature_distributions(core_samples, tail_samples, top_features, output_path):
-    """Plot distributions of top differentiating features."""
+def plot_feature_distributions(core_samples, middle_samples, tail_samples, top_features, output_path):
+    """Plot stacked distributions of top differentiating features."""
     
     n_features = min(8, len(top_features))
     fig, axes = plt.subplots(2, 4, figsize=(16, 8))
@@ -321,21 +357,27 @@ def plot_feature_distributions(core_samples, tail_samples, top_features, output_
         ax = axes[i]
         
         core_vals = core_samples[:, feat_idx]
+        middle_vals = middle_samples[:, feat_idx]
         tail_vals = tail_samples[:, feat_idx]
         
-        bins = np.linspace(min(core_vals.min(), tail_vals.min()),
-                          max(core_vals.max(), tail_vals.max()), 50)
+        # Common bins for all groups
+        all_vals = np.concatenate([core_vals, middle_vals, tail_vals])
+        bins = np.linspace(all_vals.min(), all_vals.max(), 50)
         
-        ax.hist(core_vals, bins=bins, alpha=0.6, label='Core', density=True, color='green')
-        ax.hist(tail_vals, bins=bins, alpha=0.6, label='Tail', density=True, color='red')
+        # Stacked histogram (tail at bottom, core at top)
+        ax.hist([tail_vals, middle_vals, core_vals], bins=bins, 
+               stacked=True, density=True, 
+               label=['Tail (>80%)', 'Middle (50-80%)', 'Core (<50%)'],
+               color=['#d62728', '#ff7f0e', '#2ca02c'], 
+               alpha=0.8, edgecolor='black', linewidth=0.3)
         
         ax.set_xlabel(f'Feature {feat_idx}', fontsize=11)
         ax.set_ylabel('Density', fontsize=11)
         ax.set_title(f'Feature {feat_idx} (KS={feat_info["ks_stat"]:.3f})', fontsize=12)
-        ax.legend(fontsize=9)
+        ax.legend(fontsize=9, loc='upper right')
         ax.grid(alpha=0.3)
     
-    plt.suptitle('Feature Distributions: Core vs Tail Jets', fontsize=16, y=1.00)
+    plt.suptitle('Feature Distributions: Core vs Middle vs Tail Jets', fontsize=16, y=1.00)
     plt.tight_layout()
     plt.savefig(output_path, dpi=200, bbox_inches='tight')
     plt.close()
@@ -553,6 +595,9 @@ def plot_feature_outliers(core_samples, tail_samples, output_path):
 def main():
     print("="*80)
     print("Energy Tail Analysis")
+    if DEBUG_MODE:
+        print("*** DEBUG MODE ENABLED ***")
+        print(f"*** Max samples: {MAX_DEBUG_SAMPLES}, Max batches: {MAX_DEBUG_BATCHES} ***")
     print("="*80)
     
     # Create output directories
@@ -578,9 +623,11 @@ def main():
     core_samples = jet_groups['core']['samples']
     core_energies = jet_groups['core']['energies']
     
-    # Use 90th percentile tail for detailed analysis
-    tail_samples = jet_groups['tail_90']['samples']
-    tail_energies = jet_groups['tail_90']['energies']
+    # Use 80th percentile tail for detailed analysis
+    tail_samples = jet_groups['tail_80']['samples']
+    tail_energies = jet_groups['tail_80']['energies']
+    middle_samples = jet_groups['middle_80']['samples']
+    middle_energies = jet_groups['middle_80']['energies']
     
     # 5. Feature-level analysis
     feature_stats = analyze_feature_differences(
@@ -617,7 +664,7 @@ def main():
     
     # Feature distributions
     plot_feature_distributions(
-        core_samples, tail_samples, feature_stats,
+        core_samples, middle_samples, tail_samples, feature_stats,
         os.path.join(OUTPUT_DIR, 'tail_vs_core_features.png')
     )
     
@@ -659,11 +706,11 @@ def main():
     print("="*80)
     
     np.save(os.path.join(DATA_DIR, 'core_samples.npy'), core_samples)
+    np.save(os.path.join(DATA_DIR, 'middle_samples.npy'), middle_samples)
     np.save(os.path.join(DATA_DIR, 'tail_samples.npy'), tail_samples)
     np.save(os.path.join(DATA_DIR, 'core_energies.npy'), core_energies)
+    np.save(os.path.join(DATA_DIR, 'middle_energies.npy'), middle_energies)
     np.save(os.path.join(DATA_DIR, 'tail_energies.npy'), tail_energies)
-    np.save(os.path.join(DATA_DIR, 'pos_energies.npy'), pos_energies)
-    np.save(os.path.join(DATA_DIR, 'neg_energies.npy'), neg_energies)
     
     # Save statistics
     statistics = {
@@ -690,7 +737,11 @@ def main():
             'mean_energy': float(core_energies.mean()),
             'mean_mse': float(core_mse_sample.mean())
         },
-        'tail_90_stats': {
+        'middle_80_stats': {
+            'count': int(len(middle_samples)),
+            'mean_energy': float(middle_energies.mean())
+        },
+        'tail_80_stats': {
             'count': int(len(tail_samples)),
             'mean_energy': float(tail_energies.mean()),
             'mean_mse': float(tail_mse_sample.mean())
