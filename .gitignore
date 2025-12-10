@@ -1,3 +1,5 @@
+old
+results
 *.pth
 venv
 __pycache__

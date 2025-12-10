@@ -17,6 +17,12 @@ import sys
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+# Add project root to path
+script_dir = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.dirname(script_dir)
+sys.path.insert(0, project_root)
+
 from utils.jet_dataset import JetDataset
 
 
@@ -153,7 +159,7 @@ def main():
                         help='Maximum number of jets to load per process')
     parser.add_argument('--batch-size', type=int, default=4096,
                         help='Batch size for data loading')
-    parser.add_argument('--output-dir', '-o', default='baseline_taggers/results',
+    parser.add_argument('--output-dir', '-o', default='results/gaussian_studies/baseline',
                         help='Directory to save results')
     parser.add_argument('--background', default='QCD',
                         help='Background process name (default: QCD)')
@@ -162,9 +168,13 @@ def main():
     
     args = parser.parse_args()
     
+    # Resolve paths relative to project root
+    config_path = os.path.join(project_root, args.config)
+    output_dir = os.path.join(project_root, args.output_dir)
+    
     # Load dataset configuration
-    print(f"Loading dataset config from: {args.config}")
-    with open(args.config, 'r') as f:
+    print(f"Loading dataset config from: {config_path}")
+    with open(config_path, 'r') as f:
         dataset_config = json.load(f)
     
     # Automatically detect signals: all processes except the background
@@ -238,8 +248,8 @@ def main():
     print("Generating ROC curves and results...")
     print(f"{'='*60}\n")
     
-    results = plot_roc_curves(background_scores, signal_scores_dict, args.output_dir)
-    plot_score_distributions(background_scores, signal_scores_dict, args.output_dir)
+    results = plot_roc_curves(background_scores, signal_scores_dict, output_dir)
+    plot_score_distributions(background_scores, signal_scores_dict, output_dir)
     
     # Print summary
     print(f"\n{'='*60}")
@@ -249,7 +259,7 @@ def main():
         print(f"  {signal_name:20s}: AUC = {metrics['auc']:.4f}")
     print(f"{'='*60}\n")
     
-    print(f"All results saved to: {args.output_dir}")
+    print(f"All results saved to: {output_dir}")
 
 
 if __name__ == '__main__':

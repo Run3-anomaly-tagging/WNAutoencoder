@@ -22,6 +22,12 @@ import pickle
 
 import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+# Add project root to path
+script_dir = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.dirname(script_dir)
+sys.path.insert(0, project_root)
+
 from utils.jet_dataset import JetDataset
 
 
@@ -294,7 +300,7 @@ def main():
                         help='Number of background samples for training')
     parser.add_argument('--n-test', type=int, default=50000,
                         help='Number of samples for testing')
-    parser.add_argument('--output-dir', type=str, default='baseline_taggers/results/gaussian_likelihood',
+    parser.add_argument('--output-dir', type=str, default='results/gaussian_studies/likelihood',
                         help='Output directory')
     parser.add_argument('--covariance-types', type=str, nargs='+',
                         default=['full', 'diagonal', 'identity'],
@@ -305,10 +311,12 @@ def main():
     args = parser.parse_args()
     
     # Create output directory
-    os.makedirs(args.output_dir, exist_ok=True)
+    output_dir = os.path.join(project_root, args.output_dir)
+    os.makedirs(output_dir, exist_ok=True)
     
     # Load dataset config
-    with open(args.config, 'r') as f:
+    config_path = os.path.join(project_root, args.config)
+    with open(config_path, 'r') as f:
         dataset_config = json.load(f)
     
     # Load training data (background)
@@ -356,22 +364,22 @@ def main():
         tagger.fit(train_data)
         
         # Save model
-        model_path = os.path.join(args.output_dir, f'gaussian_tagger_{cov_type}.pkl')
+        model_path = os.path.join(output_dir, f'gaussian_tagger_{cov_type}.pkl')
         tagger.save(model_path)
         
         # Evaluate
-        results = evaluate_tagger(tagger, test_bkg_data, signal_data_dict, args.output_dir)
+        results = evaluate_tagger(tagger, test_bkg_data, signal_data_dict, output_dir)
         all_results.append(results)
     
     # Save all results
-    results_path = os.path.join(args.output_dir, 'results.json')
+    results_path = os.path.join(output_dir, 'results.json')
     with open(results_path, 'w') as f:
         json.dump(all_results, f, indent=4)
     print(f"\nAll results saved to {results_path}")
     
     # Compare covariance types
     if len(all_results) > 1:
-        compare_covariance_types(all_results, args.output_dir)
+        compare_covariance_types(all_results, output_dir)
     
     # Print summary
     print("\n" + "="*80)
