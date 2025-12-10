@@ -97,6 +97,21 @@ WNAE_PARAM_PRESETS = {
         "buffer_size": 10000,
         "distance": "sliced_wasserstein"
     },
+
+    "CFG6" : {
+        "sampling": "pcd",
+        "n_steps": 50,
+        "step_size": None,
+        "noise": 0.1,
+        "temperature": 1.0,
+        "bounds": [-5.,5.],
+        "mh": False,
+        "initial_distribution": "uniform",
+        "replay": True,
+        "replay_ratio": 0.95,
+        "buffer_size": 10000,
+        "distance": "sliced_wasserstein"
+    },
 }
 
 DEFAULT_TRAINING_PARAMS = {

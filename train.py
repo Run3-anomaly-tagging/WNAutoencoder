@@ -246,12 +246,12 @@ def main():
     LEARNING_RATE = 1e-4
     FORCE_LR = None #Overwrites LR instead of loading from checkpoint
     LR_PLATEAU_FACTOR = 0.8
-    N_EPOCHS = 50
+    N_EPOCHS = 20
     LOSS_FUNCTION = "wnae"
     #LOSS_FUNCTION = "ae"
     #LOSS_FUNCTION = "nae"
     DISTANCE = "sliced_wasserstein"
-    WNAE_PRESET = "CFG5"
+    WNAE_PRESET = "CFG6"
     SAVEDIR = model_config["savedir"]+f"_{LOSS_FUNCTION}_{WNAE_PRESET}"
     CHECKPOINT_PATH = f"{SAVEDIR}/checkpoint.pth"
     PLOT_DIR = f"{SAVEDIR}/plots/"

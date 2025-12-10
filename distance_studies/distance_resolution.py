@@ -1,11 +1,27 @@
+"""
+Analyzes distance metric resolution between Gaussian distributions.
+
+Tests if Wasserstein and Sinkhorn distances can distinguish between:
+- Same distribution (A-A, B-B): Should give small distances
+- Different distributions (A-B): Should give larger distances
+
+Useful for validating distance metrics before using them in training.
+"""
+import os
+import sys
 import torch
 import numpy as np
 import json
-import os
 from datetime import datetime
 import uuid
-from wnae import WNAE
 from tqdm import tqdm
+
+# Add project root to path
+script_dir = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.dirname(script_dir)
+sys.path.insert(0, project_root)
+
+from wnae import WNAE
 
 torch.manual_seed(0)
 np.random.seed(0)
@@ -83,20 +99,56 @@ def save_json(path, data):
         json.dump(data, f, indent=2)
 
 if __name__ == "__main__":
+    import argparse
+    
+    parser = argparse.ArgumentParser(
+        description="Test distance metric resolution on Gaussian distributions",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Example:
+  python distance_studies/distance_resolution.py --dim 4 --batch 4096 --repeats 10
+  python distance_studies/distance_resolution.py --a-std 1.0 --b-std 0.5 --output results/resolution_test.json
+        """
+    )
+    parser.add_argument("--batch", type=int, default=4096, help="Batch size")
+    parser.add_argument("--dim", type=int, default=4, help="Feature dimension")
+    parser.add_argument("--repeats", type=int, default=10, help="Number of repetitions")
+    parser.add_argument("--a-mean", type=float, default=0.0, help="Mean of distribution A")
+    parser.add_argument("--a-std", type=float, default=1.0, help="Std of distribution A")
+    parser.add_argument("--b-mean", type=float, default=0.0, help="Mean of distribution B")
+    parser.add_argument("--b-std", type=float, default=0.5, help="Std of distribution B")
+    parser.add_argument("--output", type=str, default="results/distance_study/distance_resolution.json", help="Output JSON file")
+    args = parser.parse_args()
+
+    BATCH = args.batch
+    DIM = args.dim
+    N_REPEATS = args.repeats
+    A_MEAN = args.a_mean
+    A_STD = args.a_std
+    B_MEAN = args.b_mean
+    B_STD = args.b_std
+    OUTPUT_FILE = os.path.join(project_root, args.output)
+    
+    os.makedirs(os.path.dirname(OUTPUT_FILE), exist_ok=True)
+
     print("Settings:")
-    print(f"  A_MEAN = {A_MEAN}, A_STD = {A_STD}")
-    print(f"  B_MEAN = {B_MEAN}, B_STD = {B_STD}")
-    print(f"  BATCH  = {BATCH}, DIM = {DIM}, N_REPEATS = {N_REPEATS}")
+    print(f"  A ~ N({A_MEAN}, {A_STD}²)")
+    print(f"  B ~ N({B_MEAN}, {B_STD}²)")
+    print(f"  BATCH={BATCH}, DIM={DIM}, N_REPEATS={N_REPEATS}")
+    print()
 
     wd_AA_vals, sd_AA_vals = compute_self_distance(sample_A, "A")
     wd_BB_vals, sd_BB_vals = compute_self_distance(sample_B, "B")
     wd_AB_vals, sd_AB_vals = compute_cross_distance(sample_A, sample_B)
 
-    print(f"Ratio W(A,B)/W(A,A): {np.mean(wd_AB_vals) / np.mean(wd_AA_vals):.4f}")
-    print(f"Ratio Sinkhorn(A,B)/Sinkhorn(A,A): {np.mean(sd_AB_vals) / np.mean(sd_AA_vals):.4f}")
     print()
-    print(f"Difference W(A,B) - W(A,A): {np.mean(wd_AB_vals) - np.mean(wd_AA_vals):.4f}")
-    print(f"Difference Sinkhorn(A,B) - Sinkhorn(A,A): {np.mean(sd_AB_vals) - np.mean(sd_AA_vals):.4f}")
+    print("Ratios:")
+    print(f"  W(A,B)/W(A,A): {np.mean(wd_AB_vals) / np.mean(wd_AA_vals):.4f}")
+    print(f"  Sinkhorn(A,B)/Sinkhorn(A,A): {np.mean(sd_AB_vals) / np.mean(sd_AA_vals):.4f}")
+    print()
+    print("Differences:")
+    print(f"  W(A,B) - W(A,A): {np.mean(wd_AB_vals) - np.mean(wd_AA_vals):.4f}")
+    print(f"  Sinkhorn(A,B) - Sinkhorn(A,A): {np.mean(sd_AB_vals) - np.mean(sd_AA_vals):.4f}")
 
     data = load_json(OUTPUT_FILE)
     key = autokey()
@@ -111,7 +163,6 @@ if __name__ == "__main__":
             "DIM": DIM,
             "N_REPEATS": N_REPEATS,
         },
-
         "results": {
             "AA": {
                 "wd_vals": wd_AA_vals,
@@ -141,4 +192,4 @@ if __name__ == "__main__":
     }
 
     save_json(OUTPUT_FILE, data)
-    print(f"\nSaved results under key: {key} in {OUTPUT_FILE}")
+    print(f"\n[INFO] Results saved under key '{key}' in: {OUTPUT_FILE}")
