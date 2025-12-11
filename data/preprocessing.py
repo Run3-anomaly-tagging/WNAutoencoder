@@ -251,10 +251,9 @@ def scale_and_save(input_fp, output_fp, batch_size=1000, sample_size=10000):
                 for name in dtype.names:
                     if name == 'hidNeurons':
                         batch_scaled[name] = (batch[name] - means) / stds
-                    elif (name =="pt" or name=="mass" or name=="category"):
+                    else:
+                        # Copy all other fields unchanged (pt, mass, category, auxiliary features, etc.)
                         batch_scaled[name] = batch[name]
-                    else: #Skip jet images, phi, and eta
-                        continue 
 
                 
                 jets_out[start:end] = batch_scaled
@@ -318,10 +317,9 @@ def apply_scaling_and_save(input_fp, output_fp, mean, std, keys=("Jets_Bkg", "Je
                 for name in dtype.names:
                     if name == "hidNeurons":
                         batch_scaled[name] = (batch[name] - mean) / std
-                    elif name in ("pt", "mass", "category"):
-                        batch_scaled[name] = batch[name]
                     else:
-                        continue  # skip other fields
+                        # Copy all other fields unchanged (pt, mass, category, auxiliary features, etc.)
+                        batch_scaled[name] = batch[name]
                 jets_out[start:end] = batch_scaled
 
     print(f"[INFO] Scaling complete. Scaled datasets saved to: {output_fp}")
