@@ -241,7 +241,7 @@ def plot_losses(training_losses, validation_losses, save_dir):
 def main():
     # ------------------- Config ------------------- #
 
-    MODEL_NAME = "deep_bottleneck_qcd"
+    MODEL_NAME = "deep_bottleneck_qcd_bqq_aux2"
     model_config = MODEL_REGISTRY[MODEL_NAME]
     CONFIG_PATH = os.path.join(project_root, "data", "dataset_config.json")
     
@@ -252,25 +252,40 @@ def main():
     with open(CONFIG_PATH, "r") as f:
         dataset_config = json.load(f)
     
-    if model_config["process"] not in dataset_config:
-        raise KeyError(f"Process '{model_config['process']}' not found in {CONFIG_PATH}")
+    # Handle single process or list of processes
+    processes = model_config["process"]
+    if isinstance(processes, str):
+        processes = [processes]
     
-    DATA_PATH = dataset_config[model_config["process"]]["path"]
+    # Validate all processes exist and collect paths
+    DATA_PATHS = []
+    for proc in processes:
+        if proc not in dataset_config:
+            raise KeyError(f"Process '{proc}' not found in {CONFIG_PATH}")
+        path = dataset_config[proc]["path"]
+        if not os.path.exists(path):
+            raise FileNotFoundError(f"Dataset file not found: {path}\nCheck dataset_config.json paths")
+        DATA_PATHS.append(path)
     
-    # Validate data file exists
-    if not os.path.exists(DATA_PATH):
-        raise FileNotFoundError(f"Dataset file not found: {DATA_PATH}\nCheck dataset_config.json paths")
+    # For single file, unwrap the list
+    if len(DATA_PATHS) == 1:
+        DATA_PATH = DATA_PATHS[0]
+    else:
+        DATA_PATH = DATA_PATHS  # JetDataset will handle list
     
     INPUT_DIM = model_config["input_dim"]
+    AUX_DIM = model_config.get("aux_dim", 0)  # Optional auxiliary dimension
+    AUX_KEYS = ['globalParT3_QCD', 'globalParT3_TopbWqq']  # 2 auxiliary features for aux_dim=2
+    
     BATCH_SIZE = 4096
     NUM_SAMPLES = 2 ** 16
     LEARNING_RATE = 1e-4
     FORCE_LR = None  # Overwrites LR instead of loading from checkpoint
     LR_PLATEAU_FACTOR = 0.8
-    N_EPOCHS = 20
+    N_EPOCHS = 50
     LOSS_FUNCTION = "wnae"
     DISTANCE = "sliced_wasserstein"
-    WNAE_PRESET = "CFG6"
+    WNAE_PRESET = "CFG1"
     
     # Ensure models directory under project root
     SAVEDIR = os.path.join(project_root, "models", f"{model_config['savedir']}_{LOSS_FUNCTION}_{WNAE_PRESET}")
@@ -306,6 +321,9 @@ def main():
     print(f"Process: {model_config['process']}")
     print(f"Data: {DATA_PATH}")
     print(f"Input dim: {INPUT_DIM}")
+    if AUX_KEYS:
+        print(f"Auxiliary keys: {AUX_KEYS} (dim={AUX_DIM})")
+        print(f"Total model input dim: {INPUT_DIM + AUX_DIM}")
     print(f"Loss function: {LOSS_FUNCTION}")
     print(f"Distance: {DISTANCE}")
     print(f"WNAE preset: {WNAE_PRESET}")
@@ -313,18 +331,20 @@ def main():
     print(f"Save dir: {SAVEDIR}")
     print(f"{'='*60}\n")
 
-    dataset = JetDataset(DATA_PATH)
+    dataset = JetDataset(DATA_PATH, aux_keys=AUX_KEYS if AUX_KEYS else None)
     ensure_dir(SAVEDIR)
 
-    # Split
+    # Split using the actual dataset length (works for both single and multi-file)
     indices = np.arange(len(dataset))
     np.random.seed(0)
     np.random.shuffle(indices)
     split = int(0.8 * len(indices))
     train_idx, val_idx = indices[:split], indices[split:]
 
-    train_dataset = JetDataset(DATA_PATH, indices=train_idx, input_dim=INPUT_DIM, pca_components=PCA_FILE)
-    val_dataset = JetDataset(DATA_PATH, indices=val_idx, input_dim=INPUT_DIM, pca_components=PCA_FILE)
+    # Create train/val datasets by passing indices to new instances
+    # IMPORTANT: Must pass the same DATA_PATH and settings to get consistent indexing
+    train_dataset = JetDataset(DATA_PATH, indices=train_idx, input_dim=INPUT_DIM, pca_components=PCA_FILE, aux_keys=AUX_KEYS if AUX_KEYS else None)
+    val_dataset = JetDataset(DATA_PATH, indices=val_idx, input_dim=INPUT_DIM, pca_components=PCA_FILE, aux_keys=AUX_KEYS if AUX_KEYS else None)
 
     train_loader = DataLoader(
         train_dataset, 
@@ -372,7 +392,8 @@ def main():
             batch_size=BATCH_SIZE,
             wnae_params=WNAE_PARAMS,
             generate_all_plots=True,
-            savedir=SAVEDIR
+            savedir=SAVEDIR,
+            aux_keys=AUX_KEYS
         )
         print("\n[INFO] Evaluation summary:")
         print(json.dumps(summary, indent=2))

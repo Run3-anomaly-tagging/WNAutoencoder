@@ -175,97 +175,134 @@ class DeepEncoderBounded(nn.Module):
 
 
 # --- Model Registry ---
+# 
+# To use auxiliary features (e.g., globalParT discriminators):
+# 1. Add "aux_dim" field to model config (e.g., aux_dim=3 for 3 discriminators)
+# 2. Encoder/decoder lambdas must use (input_dim + aux_dim) for input/output sizes
+# 3. In train.py, pass aux_keys to JetDataset (e.g., aux_keys=['globalParT3_QCD', 'globalParT3_TopbWqq', 'globalParT3_TopbWq'])
+# 4. Auxiliary features are scaled from [0,1] to [-1,1] before concatenation
+#
+# To use multiple background processes:
+# 1. Set "process" to a list of process names (e.g., process=["QCD", "Top_bqq"])
+# 2. JetDataset will automatically load and balance samples from all files
+#
+# Example with auxiliary:
+#   "model_with_aux": {
+#       "input_dim": 32,
+#       "aux_dim": 3,
+#       "encoder": lambda: DeepEncoder(32+3, 64),
+#       "decoder": lambda: DeepDecoder(32+3, 64),
+#       "savedir": "model_with_aux",
+#       "process": "QCD"
+#   }
+#
+# Example with multiple backgrounds:
+#   "model_multi_bkg": {
+#       "input_dim": 256,
+#       "encoder": lambda: DeepEncoder(256, 512),
+#       "decoder": lambda: DeepDecoder(256, 512),
+#       "savedir": "model_multi_bkg",
+#       "process": ["QCD", "Top_bqq"]
+#   }
 
 MODEL_REGISTRY = {
     "feat16_encoder64_deep_qcd": {
         "input_dim": 16,
         "encoder": lambda: DeepEncoder(16,64),
         "decoder": lambda: DeepDecoder(16,64),
-        "savedir": "models/feat16_encoder64_deep_qcd",
+        "savedir": "feat16_encoder64_deep_qcd",
         "process":"QCD"
     },
     "feat16_encoder12_bottleneck_qcd": {
         "input_dim": 16,
         "encoder": lambda: BottleneckEncoder(input_size=16, latent_size=12, hidden_size=32),
         "decoder": lambda: BottleneckDecoder(output_size=16, latent_size=12, hidden_size=32),
-        "savedir": "models/feat16_encoder12_bottleneck_qcd",
+        "savedir": "feat16_encoder12_bottleneck_qcd",
         "process": "QCD"
     },
     "deep_ttbar": {
         "input_dim": 256,
         "encoder": lambda: DeepEncoder(256),
         "decoder": lambda: DeepDecoder(256),
-        "savedir": "models/deep_ttbar",
+        "savedir": "deep_ttbar",
         "process":"TTto4Q"
     },    
     "feat4_encoder32_deep_qcd": {
         "input_dim": 4,
         "encoder": lambda: DeepEncoder(input_size=4,hidden_size=32),
         "decoder": lambda: DeepDecoder(output_size=4,hidden_size=32),
-        "savedir": "models/feat4_encoder32_deep_qcd",
+        "savedir": "feat4_encoder32_deep_qcd",
         "process":"QCD"
     },
     "feat4_encoder4_deep_qcd": {
         "input_dim": 4,
         "encoder": lambda: DeepEncoder(input_size=4,hidden_size=4),
         "decoder": lambda: DeepDecoder(output_size=4,hidden_size=4),
-        "savedir": "models/feat4_encoder4_deep_qcd",
+        "savedir": "feat4_encoder4_deep_qcd",
         "process":"QCD"
     },
     "deep_qcd": {
         "input_dim": 256,
         "encoder": lambda: DeepEncoder(256),
         "decoder": lambda: DeepDecoder(256),
-        "savedir": "models/deep_qcd",
+        "savedir": "deep_qcd",
         "process":"QCD"
     },
     "deep_wide_qcd": {
         "input_dim": 256,
         "encoder": lambda: DeepEncoder(256,512),
         "decoder": lambda: DeepDecoder(256,512),
-        "savedir": "models/deep_wide_qcd",
+        "savedir": "deep_wide_qcd",
         "process":"QCD"
     },
     "deep_wide_qcd_fixed": {
         "input_dim": 256,
         "encoder": lambda: DeepEncoderFixed(256,512),
         "decoder": lambda: DeepDecoder(256,512),
-        "savedir": "models/deep_wide_qcd_fixed",
+        "savedir": "deep_wide_qcd_fixed",
         "process":"QCD"
     },
     "dim32_wide_qcd_fixed": {
         "input_dim": 32,
         "encoder": lambda: DeepEncoderFixed(32,64),
         "decoder": lambda: DeepDecoder(32,64),
-        "savedir": "models/dim32_wide_qcd_fixed",
+        "savedir": "dim32_wide_qcd_fixed",
         "process":"QCD"
     },
     "deep_bottleneck_qcd": {
         "input_dim": 256,
         "encoder": lambda: DeepBottleneckEncoder(256,64,512),
         "decoder": lambda: DeepBottleneckDecoder(256,64,512),
-        "savedir": "models/deep_bottleneck_qcd",
+        "savedir": "deep_bottleneck_qcd",
         "process":"QCD"
+    },
+    "deep_bottleneck_qcd_bqq_aux2": {
+        "input_dim": 256,
+        "aux_dim": 2,
+        "encoder": lambda: DeepBottleneckEncoder(256+2, 64, 512),
+        "decoder": lambda: DeepBottleneckDecoder(256+2, 64, 512),
+        "savedir": "deep_bottleneck_qcd_bqq_aux2",
+        "process": ["QCD", "Top_bqq"]
     },
     "shallow_qcd": {
         "input_dim": 256,
         "encoder": lambda: ShallowEncoder(input_size=256,hidden_size=512),
         "decoder": lambda: ShallowDecoder(output_size=256,hidden_size=512),
-        "savedir": "models/shallow_qcd",
+        "savedir": "shallow_qcd",
         "process":"QCD"
     },
     "botlleneck_qcd": {
         "input_dim": 256,
         "encoder": lambda: BottleneckEncoder(input_size=256, latent_size=192, hidden_size=320),
         "decoder": lambda: BottleneckDecoder(output_size=256, latent_size=192, hidden_size=320),
-        "savedir": "models/botlleneck_qcd",
+        "savedir": "botlleneck_qcd",
         "process":"QCD"
     },
     "paper_qcd_dim8_pca": {
         "input_dim": 8,
         "encoder": lambda: BottleneckEncoder(input_size=8, latent_size=6, hidden_size=10),
         "decoder": lambda: BottleneckDecoder(output_size=8, latent_size=6, hidden_size=10),
-        "savedir": "models/paper_qcd_dim8_pca",
+        "savedir": "paper_qcd_dim8_pca",
         "process":"QCD",
         "pca":"distance_studies/pca_output/components_std.npy"
     },
@@ -273,77 +310,77 @@ MODEL_REGISTRY = {
         "input_dim": 8,
         "encoder": lambda: BottleneckEncoder(input_size=8, latent_size=6, hidden_size=10),
         "decoder": lambda: BottleneckDecoder(output_size=8, latent_size=6, hidden_size=10),
-        "savedir": "models/paper_qcd_dim8",
+        "savedir": "paper_qcd_dim8",
         "process":"QCD"
     },
     "paper_qcd_dim16": {
         "input_dim": 16,
         "encoder": lambda: BottleneckEncoder(input_size=16, latent_size=12, hidden_size=20),
         "decoder": lambda: BottleneckDecoder(output_size=16, latent_size=12, hidden_size=20),
-        "savedir": "models/paper_qcd_dim16",
+        "savedir": "paper_qcd_dim16",
         "process":"QCD"
     },
     "paper_qcd_dim32": {
         "input_dim": 32,
         "encoder": lambda: BottleneckEncoder(input_size=32, latent_size=24, hidden_size=40),
         "decoder": lambda: BottleneckDecoder(output_size=32, latent_size=24, hidden_size=40),
-        "savedir": "models/paper_qcd_dim32",
+        "savedir": "paper_qcd_dim32",
         "process":"QCD"
     },
     "paper_qcd_dim64": {
         "input_dim": 64,
         "encoder": lambda: BottleneckEncoder(input_size=64, latent_size=48, hidden_size=80),
         "decoder": lambda: BottleneckDecoder(output_size=64, latent_size=48, hidden_size=80),
-        "savedir": "models/paper_qcd_dim64",
+        "savedir": "paper_qcd_dim64",
         "process":"QCD"
     },
     "paper_qcd_dim128": {
         "input_dim": 128,
         "encoder": lambda: BottleneckEncoder(input_size=128, latent_size=96, hidden_size=160),
         "decoder": lambda: BottleneckDecoder(output_size=128, latent_size=96, hidden_size=160),
-        "savedir": "models/paper_qcd_dim128",
+        "savedir": "paper_qcd_dim128",
         "process":"QCD"
     },
     "paper_qcd_dim256": {
         "input_dim": 256,
         "encoder": lambda: BottleneckEncoder(input_size=256, latent_size=192, hidden_size=320),
         "decoder": lambda: BottleneckDecoder(output_size=256, latent_size=192, hidden_size=320),
-        "savedir": "models/paper_qcd_dim256",
+        "savedir": "paper_qcd_dim256",
         "process":"QCD"
     },
     "shallow2_encoder32_qcd": {
         "input_dim": 2,
         "encoder": lambda: ShallowEncoder(input_size=2,hidden_size=32),
         "decoder": lambda: ShallowDecoder(output_size=2,hidden_size=32),
-        "savedir": "models/shallow2_encoder32_qcd",
+        "savedir": "shallow2_encoder32_qcd",
         "process":"QCD"
     },
     "shallow4_encoder64_qcd": {
         "input_dim": 4,
         "encoder": lambda: ShallowEncoder(input_size=4,hidden_size=64),
         "decoder": lambda: ShallowDecoder(output_size=4,hidden_size=64),
-        "savedir": "models/shallow4_encoder64_qcd",
+        "savedir": "shallow4_encoder64_qcd",
         "process":"QCD"
     },
     "shallow8_encoder64_qcd": {
         "input_dim": 8,
         "encoder": lambda: ShallowEncoder(input_size=8,hidden_size=64),
         "decoder": lambda: ShallowDecoder(output_size=8,hidden_size=64),
-        "savedir": "models/shallow8_encoder64_qcd",
+        "savedir": "shallow8_encoder64_qcd",
         "process":"QCD"
     },
     "shallow16_encoder64_qcd": {
         "input_dim": 16,
         "encoder": lambda: ShallowEncoder(input_size=16,hidden_size=64),
         "decoder": lambda: ShallowDecoder(output_size=16,hidden_size=64),
-        "savedir": "models/shallow16_encoder64_qcd",
+        "savedir": "shallow16_encoder64_qcd",
         "process":"QCD"
     },
     "shallow16_encoder128_qcd": {
         "input_dim": 16,
         "encoder": lambda: ShallowEncoder(input_size=16,hidden_size=128),
         "decoder": lambda: ShallowDecoder(output_size=16,hidden_size=128),
-        "savedir": "models/shallow16_encoder128_qcd",
+        "savedir": "shallow16_encoder128_qcd",
         "process":"QCD"
     }
 }

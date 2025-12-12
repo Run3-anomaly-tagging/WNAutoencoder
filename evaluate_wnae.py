@@ -131,11 +131,11 @@ def plot_checkpoint_energies(checkpoint: Dict[str, Any], plot_dir="plots"):
     plt.close()
     print(f"[INFO] Energy plot saved to: {plot_path}")
 
-def load_dataset(file_path: str, input_dim: int, key="Jets", max_jets=10000, pt_cut=None, pca_file = None):
+def load_dataset(file_path: str, input_dim: int, key="Jets", max_jets=10000, pt_cut=None, pca_file=None, aux_keys=None):
     """
     Load JetDataset and subsample to max_jets if needed.
     """
-    tmp_ds = JetDataset(file_path, input_dim=input_dim, key=key, pt_cut=pt_cut,pca_components=pca_file)
+    tmp_ds = JetDataset(file_path, input_dim=input_dim, key=key, pt_cut=pt_cut, pca_components=pca_file, aux_keys=aux_keys)
     if len(tmp_ds) > max_jets:
         sampled = np.random.choice(tmp_ds.indices, size=max_jets, replace=False)
         tmp_ds.indices = sampled
@@ -612,7 +612,8 @@ def run_full_evaluation(
     pt_cut=None,
     wnae_params: dict = None,
     generate_all_plots: bool = True,
-    savedir: str = None
+    savedir: str = None,
+    aux_keys: list = None
 ) -> Dict[str, Any]:
     """
     Run the full evaluation chain. Returns a summary dict containing computed metrics and saved paths.
@@ -633,7 +634,9 @@ def run_full_evaluation(
     model_config = MODEL_REGISTRY[model_name]
     INPUT_DIM = model_config["input_dim"]
     SAVEDIR = savedir or os.path.join(project_root, "models", model_config["savedir"])
-    BKG_NAME = model_config["process"]
+    BKG_NAMES = model_config["process"]
+    if isinstance(BKG_NAMES, str):
+        BKG_NAMES = [BKG_NAMES]
     PCA_FILE = model_config.get("pca", None)
     
     if PCA_FILE and not os.path.isabs(PCA_FILE):
@@ -662,24 +665,32 @@ def run_full_evaluation(
     with open(config_path, "r") as f:
         config = json.load(f)
     
-    if BKG_NAME not in config:
-        available = ", ".join(config.keys())
-        raise KeyError(f"Background process '{BKG_NAME}' not found in {config_path}.\nAvailable: {available}")
-
-    # Background dataset and loader
-    bkg_path = config[BKG_NAME]["path"]
+    # Validate all background processes exist and collect paths
+    bkg_paths = []
+    for bkg_name in BKG_NAMES:
+        if bkg_name not in config:
+            available = ", ".join(config.keys())
+            raise KeyError(f"Background process '{bkg_name}' not found in {config_path}.\nAvailable: {available}")
+        path = config[bkg_name]["path"]
+        if not os.path.exists(path):
+            raise FileNotFoundError(f"Background dataset not found: {path}\nCheck paths in {config_path}")
+        bkg_paths.append(path)
     
-    if not os.path.exists(bkg_path):
-        raise FileNotFoundError(f"Background dataset not found: {bkg_path}\nCheck paths in {config_path}")
+    # Load background dataset(s)
+    if len(bkg_paths) == 1:
+        bkg_path = bkg_paths[0]
+        print(f"[INFO] Loading background: {BKG_NAMES[0]} from {bkg_path}")
+    else:
+        bkg_path = bkg_paths
+        print(f"[INFO] Loading backgrounds: {BKG_NAMES} from {len(bkg_paths)} files")
     
-    print(f"[INFO] Loading background: {BKG_NAME} from {bkg_path}")
-    bkg_dataset = load_dataset(bkg_path, input_dim=INPUT_DIM, max_jets=max_jets, pt_cut=pt_cut, pca_file=PCA_FILE)
+    bkg_dataset = load_dataset(bkg_path, input_dim=INPUT_DIM, max_jets=max_jets, pt_cut=pt_cut, pca_file=PCA_FILE, aux_keys=aux_keys)
     bkg_loader = DataLoader(bkg_dataset, batch_size=batch_size, sampler=SequentialSampler(bkg_dataset))
 
     # Signals
     signal_loaders = {}
     for name, sample in config.items():
-        if name == BKG_NAME:
+        if name in BKG_NAMES:
             continue
         
         sig_path = sample["path"]
@@ -688,7 +699,7 @@ def run_full_evaluation(
             continue
         
         print(f"[INFO] Loading signal: {name} from {sig_path}")
-        sig_dataset = load_dataset(sig_path, input_dim=INPUT_DIM, max_jets=max_jets, pt_cut=pt_cut, pca_file=PCA_FILE)
+        sig_dataset = load_dataset(sig_path, input_dim=INPUT_DIM, max_jets=max_jets, pt_cut=pt_cut, pca_file=PCA_FILE, aux_keys=aux_keys)
         signal_loaders[name] = DataLoader(sig_dataset, batch_size=batch_size, sampler=SequentialSampler(sig_dataset))
 
     # Instantiate model and load checkpoint
@@ -763,12 +774,12 @@ def run_full_evaluation(
         signal_loaders=signal_loaders,
         summary=summary,
         savedir=SAVEDIR,
-        bkg_name=BKG_NAME,
+        bkg_name="+".join(BKG_NAMES),
     )
 
     # Eff vs pt (wp=0.1)
     try:
-        plot_eff_vs_pt(bkg_mses, sig_mses_dict, bkg_dataset, signal_loaders, wp=0.1, savedir=os.path.join(SAVEDIR, "plots"), bkg_name=BKG_NAME)
+        plot_eff_vs_pt(bkg_mses, sig_mses_dict, bkg_dataset, signal_loaders, wp=0.1, savedir=os.path.join(SAVEDIR, "plots"), bkg_name="+".join(BKG_NAMES))
         summary["plots"].append("eff_vs_pt_wp_0.1.png")
     except Exception as e:
         warnings.warn(f"plot_eff_vs_pt failed: {e}")
@@ -792,6 +803,7 @@ def _parse_args():
     parser.add_argument("--no-plots", action="store_true", help="If set, skip plot generation (only compute mses/aucs)")
     parser.add_argument("--savedir", default=None, help="Optional override for model_config['savedir']")
     parser.add_argument("--wnae-params", type=str, default=None, help="Name of WNAE parameter set from model_config")
+    parser.add_argument("--aux-keys", nargs="+", default=None, help="List of auxiliary feature keys to load (e.g., globalParT3_QCD globalParT3_TopbWqq)")
     return parser.parse_args()
 
 if __name__ == "__main__":
@@ -815,6 +827,8 @@ if __name__ == "__main__":
         pt_cut=args.pt_cut,
         generate_all_plots=not args.no_plots,
         savedir=args.savedir,
-        wnae_params=wnae_params_dict
+        wnae_params=wnae_params_dict,
+        aux_keys=args.aux_keys
     )
     print(json.dumps(summary, indent=2))
+
