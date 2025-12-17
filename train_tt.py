@@ -284,7 +284,7 @@ def main():
     LEARNING_RATE = 1e-4
     FORCE_LR = None
     LR_PLATEAU_FACTOR = 0.8
-    N_EPOCHS = 20
+    N_EPOCHS = 40
     LOSS_FUNCTION = "wnae"
     DISTANCE = "sliced_wasserstein"
     WNAE_PRESET = "CFG1"
