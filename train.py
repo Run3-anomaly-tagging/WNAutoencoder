@@ -18,7 +18,7 @@ from utils.jet_dataset import JetDataset
 from wnae import WNAE
 from model_config.model_registry import MODEL_REGISTRY
 from model_config.model_config import WNAE_PARAM_PRESETS
-from utils.plotting_helpers import ensure_dir, plot_epoch_1d, plot_epoch_2d, plot_aux_scatter
+from utils.plotting_helpers import ensure_dir, plot_epoch_1d, plot_epoch_2d
 from evaluate_wnae import run_full_evaluation 
 
 def compute_1d_projection_distance(pos_samples, neg_samples, bins=50, value_range=(-4, 4)):
@@ -178,11 +178,7 @@ def run_training(model, optimizer, loss_function, n_epochs, training_loader, val
                 plot_epoch_1d(data, mcmc, ep_dir, i_epoch+1, features, plot_config["bins"])
                 # a couple of 2D scatters for shape sanity
                 plot_epoch_2d(data, mcmc, ep_dir, i_epoch+1, pairs)
-
-                aux_dim = plot_config.get("aux_dim", 0)
-                if aux_dim >= 2:
-                    plot_aux_scatter(data, mcmc, ep_dir, i_epoch+1, aux_dim=aux_dim)
-
+            
             n_batches += 1
     
         val_proj_distance =  val_proj_distance / n_batches
@@ -275,37 +271,40 @@ def main():
     if len(DATA_PATHS) == 1:
         DATA_PATH = DATA_PATHS[0]
     else:
-        DATA_PATH = DATA_PATHS
+        DATA_PATH = DATA_PATHS  # JetDataset will handle list
     
     INPUT_DIM = model_config["input_dim"]
-    AUX_DIM = model_config.get("aux_dim", 0)
-    AUX_KEYS = ['globalParT3_QCD', 'globalParT3_TopbWqq']
-    AUX_QUANTILE_TRANSFORMER = os.path.join(project_root, "data", "aux_quantile_transformer.pkl")
+    AUX_DIM = model_config.get("aux_dim", 0)  # Optional auxiliary dimension
+    AUX_KEYS = ['globalParT3_QCD', 'globalParT3_TopbWqq']  # 2 auxiliary features for aux_dim=2
     
     BATCH_SIZE = 4096
     NUM_SAMPLES = 2 ** 16
     LEARNING_RATE = 1e-4
-    FORCE_LR = None
+    FORCE_LR = None  # Overwrites LR instead of loading from checkpoint
     LR_PLATEAU_FACTOR = 0.8
-    N_EPOCHS = 40
+    N_EPOCHS = 50
     LOSS_FUNCTION = "wnae"
     DISTANCE = "sliced_wasserstein"
     WNAE_PRESET = "CFG1"
     
-    # Use savedir from registry + append WNAE_PRESET
-    SAVEDIR = os.path.join(project_root, "models", f"{model_config['savedir']}_{WNAE_PRESET}")
+    # Ensure models directory under project root
+    SAVEDIR = os.path.join(project_root, "models", f"{model_config['savedir']}_{LOSS_FUNCTION}_{WNAE_PRESET}")
     CHECKPOINT_PATH = os.path.join(SAVEDIR, "checkpoint.pth")
     PLOT_DIR = os.path.join(SAVEDIR, "plots")
+    PCA_FILE = model_config.get("pca", None)
+    
+    if PCA_FILE and not os.path.isabs(PCA_FILE):
+        PCA_FILE = os.path.join(project_root, PCA_FILE)
 
+    # Plot configuration
     plot_config = {
         "plot_distributions": True,
-        "plot_epochs": [],
+        "plot_epochs": [],  # Empty = only final epoch
         "bins": np.linspace(-5.0, 5.0, 101),
         "n_1d_samples": 2,
         "n_2d_samples": 1,
         "rng_seed": 0,
-        "plot_dir": PLOT_DIR,
-        "aux_dim": len(AUX_KEYS) if AUX_KEYS else 0
+        "plot_dir": PLOT_DIR
     }
 
     DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -313,6 +312,8 @@ def main():
     WNAE_PARAMS["device"] = DEVICE
     WNAE_PARAMS["distance"] = DISTANCE
 
+    # -------------------  ------------------- #
+    
     print(f"\n{'='*60}")
     print(f"Training Configuration")
     print(f"{'='*60}")
@@ -327,31 +328,23 @@ def main():
     print(f"Distance: {DISTANCE}")
     print(f"WNAE preset: {WNAE_PRESET}")
     print(f"Device: {DEVICE}")
+    print(f"Save dir: {SAVEDIR}")
     print(f"{'='*60}\n")
 
     dataset = JetDataset(DATA_PATH, aux_keys=AUX_KEYS if AUX_KEYS else None)
     ensure_dir(SAVEDIR)
-    
+
+    # Split using the actual dataset length (works for both single and multi-file)
     indices = np.arange(len(dataset))
     np.random.seed(0)
     np.random.shuffle(indices)
     split = int(0.8 * len(indices))
     train_idx, val_idx = indices[:split], indices[split:]
 
-    train_dataset = JetDataset(
-        DATA_PATH,
-        indices=train_idx,
-        input_dim=INPUT_DIM,
-        aux_keys=AUX_KEYS if AUX_KEYS else None,
-        aux_quantile_transformer=AUX_QUANTILE_TRANSFORMER if AUX_KEYS else None
-    )
-    val_dataset = JetDataset(
-        DATA_PATH,
-        indices=val_idx,
-        input_dim=INPUT_DIM,
-        aux_keys=AUX_KEYS if AUX_KEYS else None,
-        aux_quantile_transformer=AUX_QUANTILE_TRANSFORMER if AUX_KEYS else None
-    )
+    # Create train/val datasets by passing indices to new instances
+    # IMPORTANT: Must pass the same DATA_PATH and settings to get consistent indexing
+    train_dataset = JetDataset(DATA_PATH, indices=train_idx, input_dim=INPUT_DIM, pca_components=PCA_FILE, aux_keys=AUX_KEYS if AUX_KEYS else None)
+    val_dataset = JetDataset(DATA_PATH, indices=val_idx, input_dim=INPUT_DIM, pca_components=PCA_FILE, aux_keys=AUX_KEYS if AUX_KEYS else None)
 
     train_loader = DataLoader(
         train_dataset, 
@@ -381,17 +374,15 @@ def main():
         n_epochs=N_EPOCHS,
         training_loader=train_loader,
         validation_loader=val_loader,
-        plot_config=plot_config,
         checkpoint_path=CHECKPOINT_PATH, 
+        plot_config=plot_config, 
         device=DEVICE,
         lr_factor=LR_PLATEAU_FACTOR,
         force_lr=FORCE_LR
     )
-
     plot_losses(training_losses, validation_losses, PLOT_DIR)
 
     print("\n[INFO] Starting full evaluation of trained checkpoint...")
-    summary = None
     try:
         summary = run_full_evaluation(
             checkpoint_path=CHECKPOINT_PATH,
@@ -401,16 +392,15 @@ def main():
             batch_size=BATCH_SIZE,
             wnae_params=WNAE_PARAMS,
             generate_all_plots=True,
+            savedir=SAVEDIR,
             aux_keys=AUX_KEYS
         )
-    except Exception as e:
-        import traceback
-        print(f"[ERROR] Full evaluation failed: {e}")
-        traceback.print_exc()
-
-    if summary is not None:
         print("\n[INFO] Evaluation summary:")
         print(json.dumps(summary, indent=2))
+    except Exception as e:
+        print(f"[ERROR] Full evaluation failed: {e}")
+        import traceback
+        traceback.print_exc()
 
 if __name__ == "__main__":
     main()

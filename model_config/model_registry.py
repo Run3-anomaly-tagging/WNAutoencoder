@@ -278,17 +278,11 @@ MODEL_REGISTRY = {
     },
     "deep_bottleneck_qcd_bqq_aux2": {
         "input_dim": 256,
-        "encoder": lambda: DeepBottleneckEncoder(258,64,512),
-        "decoder": lambda: DeepBottleneckDecoder(258,64,512),
+        "aux_dim": 2,
+        "encoder": lambda: DeepBottleneckEncoder(256+2, 64, 512),
+        "decoder": lambda: DeepBottleneckDecoder(256+2, 64, 512),
         "savedir": "deep_bottleneck_qcd_bqq_aux2",
         "process": ["QCD", "Top_bqq"]
-    },
-    "deep_bottleneck_bqq": {
-        "input_dim": 256,
-        "encoder": lambda: DeepBottleneckEncoder(256,64,512),
-        "decoder": lambda: DeepBottleneckDecoder(256,64,512),
-        "savedir": "deep_bottleneck_bqq",
-        "process":"Top_bqq"
     },
     "shallow_qcd": {
         "input_dim": 256,
@@ -303,6 +297,14 @@ MODEL_REGISTRY = {
         "decoder": lambda: BottleneckDecoder(output_size=256, latent_size=192, hidden_size=320),
         "savedir": "botlleneck_qcd",
         "process":"QCD"
+    },
+    "paper_qcd_dim8_pca": {
+        "input_dim": 8,
+        "encoder": lambda: BottleneckEncoder(input_size=8, latent_size=6, hidden_size=10),
+        "decoder": lambda: BottleneckDecoder(output_size=8, latent_size=6, hidden_size=10),
+        "savedir": "paper_qcd_dim8_pca",
+        "process":"QCD",
+        "pca":"distance_studies/pca_output/components_std.npy"
     },
     "paper_qcd_dim8": {
         "input_dim": 8,

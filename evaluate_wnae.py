@@ -131,26 +131,11 @@ def plot_checkpoint_energies(checkpoint: Dict[str, Any], plot_dir="plots"):
     plt.close()
     print(f"[INFO] Energy plot saved to: {plot_path}")
 
-def load_dataset(file_path: str, input_dim: int, key="Jets", max_jets=10000, pt_cut=None, aux_keys=None):
+def load_dataset(file_path: str, input_dim: int, key="Jets", max_jets=10000, pt_cut=None, pca_file=None, aux_keys=None):
     """
     Load JetDataset and subsample to max_jets if needed.
     """
-    aux_quantile_transformer = None
-    if aux_keys is not None and len(aux_keys) > 0:
-        script_dir = os.path.dirname(os.path.abspath(__file__))
-        transformer_path = os.path.join(script_dir, "data", "aux_quantile_transformer.pkl")
-        if os.path.exists(transformer_path):
-            aux_quantile_transformer = transformer_path
-
-    tmp_ds = JetDataset(
-        file_path,
-        input_dim=input_dim,
-        key=key,
-        pt_cut=pt_cut,
-        aux_keys=aux_keys,
-        aux_quantile_transformer=aux_quantile_transformer
-    )
-
+    tmp_ds = JetDataset(file_path, input_dim=input_dim, key=key, pt_cut=pt_cut, pca_components=pca_file, aux_keys=aux_keys)
     if len(tmp_ds) > max_jets:
         sampled = np.random.choice(tmp_ds.indices, size=max_jets, replace=False)
         tmp_ds.indices = sampled
@@ -652,6 +637,10 @@ def run_full_evaluation(
     BKG_NAMES = model_config["process"]
     if isinstance(BKG_NAMES, str):
         BKG_NAMES = [BKG_NAMES]
+    PCA_FILE = model_config.get("pca", None)
+    
+    if PCA_FILE and not os.path.isabs(PCA_FILE):
+        PCA_FILE = os.path.join(project_root, PCA_FILE)
 
     if wnae_params is None:
         WNAE_PARAMS = WNAE_PARAM_PRESETS["DEFAULT_WNAE_PARAMS"].copy()
@@ -695,7 +684,7 @@ def run_full_evaluation(
         bkg_path = bkg_paths
         print(f"[INFO] Loading backgrounds: {BKG_NAMES} from {len(bkg_paths)} files")
     
-    bkg_dataset = load_dataset(bkg_path, input_dim=INPUT_DIM, max_jets=max_jets, pt_cut=pt_cut, aux_keys=aux_keys)
+    bkg_dataset = load_dataset(bkg_path, input_dim=INPUT_DIM, max_jets=max_jets, pt_cut=pt_cut, pca_file=PCA_FILE, aux_keys=aux_keys)
     bkg_loader = DataLoader(bkg_dataset, batch_size=batch_size, sampler=SequentialSampler(bkg_dataset))
 
     # Signals
@@ -710,7 +699,7 @@ def run_full_evaluation(
             continue
         
         print(f"[INFO] Loading signal: {name} from {sig_path}")
-        sig_dataset = load_dataset(sig_path, input_dim=INPUT_DIM, max_jets=max_jets, pt_cut=pt_cut, aux_keys=aux_keys)
+        sig_dataset = load_dataset(sig_path, input_dim=INPUT_DIM, max_jets=max_jets, pt_cut=pt_cut, pca_file=PCA_FILE, aux_keys=aux_keys)
         signal_loaders[name] = DataLoader(sig_dataset, batch_size=batch_size, sampler=SequentialSampler(sig_dataset))
 
     # Instantiate model and load checkpoint

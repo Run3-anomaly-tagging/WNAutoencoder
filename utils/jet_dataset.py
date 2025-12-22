@@ -6,7 +6,7 @@ from utils.h5_helpers import extract_hidden_features
 
 
 class JetDataset(Dataset):
-    def __init__(self, filepath, indices=None, input_dim=None, key="Jets", pt_cut=None, aux_keys=None, aux_quantile_transformer=None):
+    def __init__(self, filepath, indices=None, input_dim=None, key="Jets", pt_cut=None, pca_components=None, aux_keys=None):
         """
         JetDataset for loading jet data from HDF5 files.
         
@@ -16,9 +16,18 @@ class JetDataset(Dataset):
             input_dim: Number of input features to use
             key: HDF5 dataset key (default: "Jets")
             pt_cut: Optional pT threshold for filtering
+            pca_components: Optional PCA components for dimensionality reduction
             aux_keys: Optional list of auxiliary feature keys to load and concatenate
-            aux_quantile_transformer: Path to saved QuantileTransformer pickle or fitted transformer object to transform auxiliary discriminants to facilitate MCMC sampling
         """
+        
+        self.pca_components = None
+        if pca_components is not None:
+            if isinstance(pca_components, str):
+                self.pca_components = np.load(pca_components).astype(np.float32)
+            else:
+                # allow passing np array directly
+                self.pca_components = np.array(pca_components, dtype=np.float32)
+            self.pca_components = self.pca_components[:input_dim]  # Use only input_dim PCA components
 
         # Handle single file or list of files
         if isinstance(filepath, (list, tuple)):
@@ -28,18 +37,6 @@ class JetDataset(Dataset):
         
         self.input_dim = input_dim
         self.aux_dim = len(self.aux_keys)
-
-        # Load quantile transformer if provided
-        self.aux_quantile_transformer = None
-        if aux_quantile_transformer is not None:
-            if isinstance(aux_quantile_transformer, str):
-                import pickle
-                with open(aux_quantile_transformer, 'rb') as f:
-                    self.aux_quantile_transformer = pickle.load(f)
-                print(f"Loaded quantile transformer from {aux_quantile_transformer}")
-            else:
-                self.aux_quantile_transformer = aux_quantile_transformer
-                print("Using provided quantile transformer object")
 
     def _load_single_file(self, filepath, key, pt_cut, aux_keys, indices):
         """Load data from a single HDF5 file."""
@@ -55,6 +52,7 @@ class JetDataset(Dataset):
         self.total_len = len(self.jets_list[0])
         print(f"Loaded {filepath} with {self.total_len} jets")
         
+        # Load auxiliary features if specified
         self.aux_keys = aux_keys if aux_keys is not None else []
         self.aux_data = {}
         if self.aux_keys:
@@ -62,6 +60,7 @@ class JetDataset(Dataset):
                 self.aux_data[aux_key] = self.jets_list[0][aux_key][:]
             print(f"Loaded auxiliary features: {self.aux_keys}")
         
+        # Apply pt cut if requested
         if pt_cut is not None:
             selected = np.where(self.pt > pt_cut)[0]
             if indices is not None:
@@ -103,7 +102,9 @@ class JetDataset(Dataset):
             self.jets_list.append(jets)
             file_lengths.append(len(jets))
             print(f"Loaded {filepath} with {len(jets)} jets")
-
+        
+        # Determine sampling strategy
+        # Always balance: take min(file_lengths) from each file with consistent seeding
         n_per_file = min(file_lengths)
         if indices is not None:
             print(f"Loading with train/val indices: using {n_per_file} jets from each of {len(filepaths)} files (consistent with parent)")
@@ -113,15 +114,17 @@ class JetDataset(Dataset):
         # Second pass: load data with consistent sampling
         for file_idx, (filepath, jets) in enumerate(zip(filepaths, self.jets_list)):
             # Use reproducible sampling based on file index
-            np.random.seed(42 + file_idx) # Answer to the Ultimate Question of Life, the Universe, and Everything
+            np.random.seed(42 + file_idx)
             file_indices = np.random.choice(len(jets), size=n_per_file, replace=False)
             
+            # Load metadata for selected jets
             all_pt.append(jets['pt'][:][file_indices])
             all_mass.append(jets['mass'][:][file_indices])
             all_gloParT_QCD.append(jets['globalParT3_QCD'][:][file_indices])
             all_gloParT_Tbqq.append(jets['globalParT3_TopbWqq'][:][file_indices])
             all_gloParT_Tbq.append(jets['globalParT3_TopbWq'][:][file_indices])
             
+            # Load auxiliary features for selected jets
             for aux_key in self.aux_keys:
                 all_aux_data[aux_key].append(jets[aux_key][:][file_indices])
         
@@ -180,7 +183,9 @@ class JetDataset(Dataset):
         jet = self.jets_list[file_idx][local_idx]
         features = extract_hidden_features(jet[None])[0].astype(np.float32)
 
-        if self.input_dim is not None:
+        if self.pca_components is not None:
+            features = self.pca_components @ features
+        elif self.input_dim is not None:
             features = features[:self.input_dim]
 
         features_tensor = torch.tensor(features)
@@ -188,20 +193,9 @@ class JetDataset(Dataset):
         # Concatenate auxiliary features if specified
         if self.aux_keys:
             aux_values = np.array([self.aux_data[key][global_idx] for key in self.aux_keys], dtype=np.float32)
-            
-            if self.aux_quantile_transformer is not None:
-                # Convert to discriminants (normalized ratios)
-                aux_sum = aux_values.sum() + 1e-8
-                discriminants = aux_values / aux_sum
-                
-                # Apply quantile transform
-                aux_transformed = self.aux_quantile_transformer.transform(discriminants.reshape(1, -1))[0]
-                aux_tensor = torch.tensor(aux_transformed.astype(np.float32))
-            else:
-                aux_sum = aux_values.sum() + 1e-8
-                discriminants = aux_values / aux_sum
-                aux_tensor = torch.tensor(discriminants)
-            
+            # Scale from [0, 1] to [-3, 3]
+            aux_scaled = 2 * 3.0 * (aux_values - 0.5)
+            aux_tensor = torch.tensor(aux_scaled)
             features_tensor = torch.cat([features_tensor, aux_tensor])
         
         return features_tensor, features_tensor
