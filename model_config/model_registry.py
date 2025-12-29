@@ -174,28 +174,6 @@ class DeepEncoderBounded(nn.Module):
         return x
 
 
-# --- Model Registry ---
-# 
-# To use auxiliary features (e.g., globalParT discriminators):
-# 1. Add "aux_dim" field to model config (e.g., aux_dim=3 for 3 discriminators)
-# 2. Encoder/decoder lambdas must use (input_dim + aux_dim) for input/output sizes
-# 3. In train.py, pass aux_keys to JetDataset (e.g., aux_keys=['globalParT3_QCD', 'globalParT3_TopbWqq', 'globalParT3_TopbWq'])
-# 4. Auxiliary features are scaled from [0,1] to [-1,1] before concatenation
-#
-# To use multiple background processes:
-# 1. Set "process" to a list of process names (e.g., process=["QCD", "Top_bqq"])
-# 2. JetDataset will automatically load and balance samples from all files
-#
-# Example with auxiliary:
-#   "model_with_aux": {
-#       "input_dim": 32,
-#       "aux_dim": 3,
-#       "encoder": lambda: DeepEncoder(32+3, 64),
-#       "decoder": lambda: DeepDecoder(32+3, 64),
-#       "savedir": "model_with_aux",
-#       "process": "QCD"
-#   }
-#
 # Example with multiple backgrounds:
 #   "model_multi_bkg": {
 #       "input_dim": 256,
@@ -275,14 +253,6 @@ MODEL_REGISTRY = {
         "decoder": lambda: DeepBottleneckDecoder(256,64,512),
         "savedir": "deep_bottleneck_qcd",
         "process":"QCD"
-    },
-    "deep_bottleneck_qcd_bqq_aux2": {
-        "input_dim": 256,
-        "aux_dim": 2,
-        "encoder": lambda: DeepBottleneckEncoder(256+2, 64, 512),
-        "decoder": lambda: DeepBottleneckDecoder(256+2, 64, 512),
-        "savedir": "deep_bottleneck_qcd_bqq_aux2",
-        "process": ["QCD", "Top_bqq"]
     },
     "shallow_qcd": {
         "input_dim": 256,
