@@ -1,31 +1,31 @@
 {
   "QCD":{
-    "path":"data/QCD_merged_scaled.h5"
+    "path":"data/QCD_merged.h5"
     },
   "GluGluHto2B": {
-    "path": "data/GluGluHto2B_scaled.h5",
+    "path": "data/GluGluHto2B.h5",
     "xsec": 1.0
   },
   "SVJ": {
-    "path": "data/svj_scaled.h5",
+    "path": "data/svj.h5",
     "xsec": 1.0
   },
   "Yto4Q": {
-    "path": "data/Yto4Q_scaled.h5",
+    "path": "data/Yto4Q.h5",
     "xsec": 1.0
   },
   "TTto4Q":{
-    "path": "data/TTto4Q_scaled.h5",
+    "path": "data/TTto4Q.h5",
     "xsec": 762
   },
   "ZtoQQ":{
-    "path": "data/ZJets800_scaled.h5"
+    "path": "data/ZJets800.h5"
   },
   "WtoQQ":{
-    "path": "data/WJets800_scaled.h5"
+    "path": "data/WJets800.h5"
   },
   "Top_bqq":{
-    "path": "data/TTto4Q_scaled_bqq.h5",
+    "path": "data/TTto4Q_bqq.h5",
     "xsec": 762
   }
 }

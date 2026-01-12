@@ -274,15 +274,14 @@ def main():
         DATA_PATH = DATA_PATHS  # JetDataset will handle list
     
     INPUT_DIM = model_config["input_dim"]
-    BATCH_SIZE = 4096
+    BATCH_SIZE = 2048
     NUM_SAMPLES = 2 ** 16
     LEARNING_RATE = 1e-4
     FORCE_LR = None  # Overwrites LR instead of loading from checkpoint
     LR_PLATEAU_FACTOR = 0.8
-    N_EPOCHS = 50
+    N_EPOCHS = 60
     LOSS_FUNCTION = "wnae"
-    DISTANCE = "sliced_wasserstein"
-    WNAE_PRESET = "CFG1"
+    WNAE_PRESET = "CFG8"
     
     # Ensure models directory under project root
     SAVEDIR = os.path.join(project_root, "models", f"{model_config['savedir']}_{LOSS_FUNCTION}_{WNAE_PRESET}")
@@ -303,7 +302,7 @@ def main():
     DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     WNAE_PARAMS = WNAE_PARAM_PRESETS[WNAE_PRESET].copy()
     WNAE_PARAMS["device"] = DEVICE
-    WNAE_PARAMS["distance"] = DISTANCE
+    SCALING_FILE = model_config.get("scaling_file", None)
 
     # -------------------  ------------------- #
     
@@ -313,15 +312,16 @@ def main():
     print(f"Model: {MODEL_NAME}")
     print(f"Process: {model_config['process']}")
     print(f"Data: {DATA_PATH}")
+    print(f"Scaling file: {SCALING_FILE}")
     print(f"Input dim: {INPUT_DIM}")
     print(f"Loss function: {LOSS_FUNCTION}")
-    print(f"Distance: {DISTANCE}")
+    print(f"Distance: {WNAE_PARAMS['distance']}")
     print(f"WNAE preset: {WNAE_PRESET}")
     print(f"Device: {DEVICE}")
     print(f"Save dir: {SAVEDIR}")
     print(f"{'='*60}\n")
 
-    dataset = JetDataset(DATA_PATH)
+    dataset = JetDataset(DATA_PATH, scaling_file=SCALING_FILE)
     ensure_dir(SAVEDIR)
 
     # Split using the actual dataset length (works for both single and multi-file)
@@ -333,8 +333,8 @@ def main():
 
     # Create train/val datasets by passing indices to new instances
     # IMPORTANT: Must pass the same DATA_PATH and settings to get consistent indexing
-    train_dataset = JetDataset(DATA_PATH, indices=train_idx, input_dim=INPUT_DIM)
-    val_dataset = JetDataset(DATA_PATH, indices=val_idx, input_dim=INPUT_DIM)
+    train_dataset = JetDataset(DATA_PATH, indices=train_idx, input_dim=INPUT_DIM, scaling_file=SCALING_FILE)
+    val_dataset = JetDataset(DATA_PATH, indices=val_idx, input_dim=INPUT_DIM, scaling_file=SCALING_FILE)
 
     train_loader = DataLoader(
         train_dataset, 

@@ -6,9 +6,9 @@ from utils.h5_helpers import extract_hidden_features
 
 
 class JetDataset(Dataset):
-    def __init__(self, filepath, indices=None, input_dim=None, key="Jets", pt_cut=None):
+    def __init__(self, filepath, indices=None, input_dim=None, key="Jets", pt_cut=None, scaling_file=None):
         """
-        JetDataset for loading jet data from HDF5 files.
+        JetDataset for loading jet data from HDF5 files, with dynamic feature scaling.
 
         Args:
             filepath: Path to HDF5 file, or list of paths for multi-file loading
@@ -16,7 +16,15 @@ class JetDataset(Dataset):
             input_dim: Number of input features to use
             key: HDF5 dataset key (default: "Jets")
             pt_cut: Optional pT threshold for filtering
+            scaling_file: Path to .npz file containing 'mean' and 'std' arrays for scaling (REQUIRED)
         """
+        if scaling_file is None:
+            raise ValueError("scaling_file argument is required (path to .npz file with 'mean' and 'std').")
+        print(f"Loading scaling from {scaling_file}")
+        scaling_stats = np.load(scaling_file)
+        self.scaling_mean = scaling_stats["mean"]
+        self.scaling_std = scaling_stats["std"]
+
         # Handle single file or list of files
         if isinstance(filepath, (list, tuple)):
             self._load_multiple_files(filepath, key, pt_cut, indices)
@@ -137,7 +145,7 @@ class JetDataset(Dataset):
         return len(self.indices)
 
     def __getitem__(self, idx):
-        """Get jet at index idx."""
+        """Get jet at index idx, with dynamic scaling applied."""
         global_idx = self.indices[idx]
         file_idx = self.file_indices[global_idx]
         local_idx = self.local_indices[global_idx]
@@ -148,7 +156,13 @@ class JetDataset(Dataset):
 
         if self.input_dim is not None:
             features = features[:self.input_dim]
+            mean = self.scaling_mean[:self.input_dim]
+            std = self.scaling_std[:self.input_dim]
+        else:
+            mean = self.scaling_mean
+            std = self.scaling_std
 
+        features = (features - mean) / std
         features_tensor = torch.tensor(features)
         return features_tensor, features_tensor
 

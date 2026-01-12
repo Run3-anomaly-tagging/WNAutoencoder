@@ -456,6 +456,35 @@ def run_apply_qcd_scaling_to_signals():
         
         apply_scaling_and_save(input_filepath, output_filepath, mean, std, keys=["Jets"], batch_size=1000)
 
+def save_scaling_stats(input_fp, output_fp, sample_size=100000):
+    """
+    Compute mean and std of 'hidNeurons' features for a given jet class and save to .npz file.
+    Args:
+        input_fp: Path to input HDF5 file.
+        output_fp: Path to output .npz file.
+        sample_size: Number of jets to sample for statistics (default: 100000).
+    """
+    key = "Jets"
+    with h5py.File(input_fp, "r") as f:
+        jets = f[key]
+        n = len(jets)
+        sample_size = min(sample_size, n)
+        indices = np.random.choice(n, sample_size, replace=False)
+        sample_hid = np.array([jets[i]['hidNeurons'] for i in indices])
+        mean = sample_hid.mean(axis=0)
+        std = sample_hid.std(axis=0)
+        np.savez(output_fp, mean=mean, std=std)
+        print(f"[INFO] Saved scaling stats to {output_fp} (mean shape: {mean.shape}, std shape: {std.shape})")
+
+def run_generate_scaling_file():
+    """Prompt user for input HDF5 and output .npz, then generate scaling file."""
+    input_fp = input("Enter path to input HDF5 file: ").strip()
+    output_fp = input("Enter path to output .npz file: ").strip()
+    if not os.path.exists(input_fp):
+        print(f"[ERROR] Input file not found: {input_fp}")
+        return
+    save_scaling_stats(input_fp, output_fp)
+
 def interactive_menu():
     """Display interactive menu for preprocessing operations."""
     operations = {
@@ -465,6 +494,7 @@ def interactive_menu():
         "4": ("Merge QCD + TTto4Q", run_merge_qcd_tt),
         "5": ("Apply QCD scaling to signals", run_apply_qcd_scaling_to_signals),
         "6": ("Inspect HDF5 file", lambda: inspect_h5(input("Enter filepath: ").strip())),
+        "7": ("Generate scaling file (.npz) from HDF5", run_generate_scaling_file),
     }
     
     while True:
