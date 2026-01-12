@@ -131,11 +131,11 @@ def plot_checkpoint_energies(checkpoint: Dict[str, Any], plot_dir="plots"):
     plt.close()
     print(f"[INFO] Energy plot saved to: {plot_path}")
 
-def load_dataset(file_path: str, input_dim: int, key="Jets", max_jets=10000, pt_cut=None):
+def load_dataset(file_path: str, input_dim: int, scaling_file: str, key="Jets", max_jets=10000, pt_cut=None):
     """
-    Load JetDataset and subsample to max_jets if needed.
+    Load JetDataset and subsample to max_jets if needed. Applies dynamic scaling using scaling_file (.npz).
     """
-    tmp_ds = JetDataset(file_path, input_dim=input_dim, key=key, pt_cut=pt_cut)
+    tmp_ds = JetDataset(file_path, input_dim=input_dim, key=key, pt_cut=pt_cut, scaling_file=scaling_file)
     if len(tmp_ds) > max_jets:
         sampled = np.random.choice(tmp_ds.indices, size=max_jets, replace=False)
         tmp_ds.indices = sampled
@@ -492,7 +492,6 @@ def plot_reco_map_with_mcmc(model: WNAE, bkg_loader: torch.utils.data.DataLoader
     plt.close()
     print(f"[INFO] Saved {outpath}")
 
-
 def make_summary_plots(
     bkg_mses,
     sig_mses_dict,
@@ -598,6 +597,162 @@ def make_summary_plots(
     except Exception as e:
         warnings.warn(f"Failed to create combined summary figure: {e}")
 
+
+def plot_reco_map_around_selected_jet(
+    model: WNAE,
+    jet_tensor: torch.Tensor,
+    savedir: str,
+    process: str = "process",
+    feature_idx: tuple = (0, 1),
+    value_range: tuple = (-4, 4),
+    n_grid: int = 100,
+    device: torch.device = torch.device("cpu")
+):
+    """
+    Plot a 2D energy map around a selected jet (no MCMC overlay).
+    Saves plot as 'reco_energy_map_selected_jet_{process}.png' in savedir.
+    Marks the original jet location.
+    """
+    os.makedirs(savedir, exist_ok=True)
+    f1, f2 = feature_idx
+    vmin, vmax = value_range
+
+    grid_x = np.linspace(vmin, vmax, n_grid)
+    grid_y = np.linspace(vmin, vmax, n_grid)
+    xx, yy = np.meshgrid(grid_x, grid_y)
+
+    jet_tensor = jet_tensor.to(device)
+    base_jet = jet_tensor.clone()
+
+    energies = np.zeros_like(xx, dtype=float)
+    for i in range(n_grid):
+        for j in range(n_grid):
+            point = base_jet.clone()
+            point[:, f1] = torch.tensor(xx[i, j], device=device)
+            point[:, f2] = torch.tensor(yy[i, j], device=device)
+            with torch.no_grad():
+                try:
+                    e = model._WNAE__energy(point)
+                    energies[i, j] = e.detach().cpu().item()
+                except Exception as ex:
+                    energies[i, j] = np.nan
+
+    # Get original jet coordinates for marking
+    orig_f1 = float(jet_tensor[0, f1].cpu().numpy())
+    orig_f2 = float(jet_tensor[0, f2].cpu().numpy())
+
+    fig, ax = plt.subplots(figsize=(7, 6))
+    im = ax.imshow(
+        energies.T,
+        origin="lower",
+        extent=[vmin, vmax, vmin, vmax],
+        aspect="auto",
+        cmap="plasma"
+    )
+    ax.set_title(f"Energy map around selected jet ({process})")
+    ax.set_xlabel(f"Feature {f1}")
+    ax.set_ylabel(f"Feature {f2}")
+    fig.colorbar(im, ax=ax, label="Energy")
+    # Mark the original jet with a star only (no line in legend)
+    ax.plot(orig_f1, orig_f2, marker='*', color='red', markersize=14, linestyle='None', label='Original jet')
+    ax.legend()
+    plt.tight_layout()
+    outpath = os.path.join(savedir, f"reco_energy_map_selected_jet_{process}.png")
+    plt.savefig(outpath, dpi=200)
+    plt.close()
+    print(f"[INFO] Saved {outpath}")
+
+def plot_avg_reco_map_around_jets(
+    model: WNAE,
+    jets_tensor: torch.Tensor,
+    savedir: str,
+    process: str = "process",
+    feature_idx: tuple = (0, 1),
+    value_range: tuple = (-4, 4),
+    n_grid: int = 100,
+    device: torch.device = torch.device("cpu")
+):
+    """
+    Plot the average 2D energy map around many jets.
+    - jets_tensor: shape [N, n_features]
+    - Shows average energy map and a scatter plot of jet (f1, f2) values.
+    - Reports average jet length.
+    Vectorized over grid for speedup.
+    Saves plot as 'avg_reco_energy_map_{process}.png' in savedir.
+    """
+    os.makedirs(savedir, exist_ok=True)
+    f1, f2 = feature_idx
+    vmin, vmax = value_range
+
+    grid_x = np.linspace(vmin, vmax, n_grid)
+    grid_y = np.linspace(vmin, vmax, n_grid)
+    xx, yy = np.meshgrid(grid_x, grid_y)
+
+    jets_tensor = jets_tensor.to(device)
+    n_jets = jets_tensor.shape[0]
+    n_features = jets_tensor.shape[1]
+
+    jet_lengths = jets_tensor.norm(dim=1).cpu().numpy()
+    avg_jet_length = np.mean(jet_lengths)
+    print(f"[INFO] Average jet L2 norm for {process}: {avg_jet_length:.4f}")
+
+    avg_energies = np.zeros_like(xx, dtype=float)
+
+    grid_points = np.stack([xx.ravel(), yy.ravel()], axis=1)  # shape [n_grid*n_grid, 2]
+    for jet_idx in range(n_jets):
+        print(jet_idx, end="\r")
+        base_jet = jets_tensor[jet_idx:jet_idx+1].clone().repeat(n_grid * n_grid, 1)
+        base_jet[:, f1] = torch.tensor(grid_points[:, 0], device=device, dtype=base_jet.dtype)
+        base_jet[:, f2] = torch.tensor(grid_points[:, 1], device=device, dtype=base_jet.dtype)
+        with torch.no_grad():
+            try:
+                e = model._WNAE__energy(base_jet)
+                if e.ndim == 0:
+                    energies = e.cpu().numpy() * np.ones((n_grid * n_grid,))
+                else:
+                    energies = e.cpu().numpy()
+            except Exception as ex:
+                energies = np.full((n_grid * n_grid,), np.nan)
+        avg_energies += energies.reshape(n_grid, n_grid)
+
+    avg_energies /= n_jets
+
+    # Prepare scatter data
+    jets_f1 = jets_tensor[:, f1].cpu().numpy()
+    jets_f2 = jets_tensor[:, f2].cpu().numpy()
+
+    fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+
+    # Average energy map
+    ax0 = axes[0]
+    im = ax0.imshow(
+        avg_energies.T,
+        origin="lower",
+        extent=[vmin, vmax, vmin, vmax],
+        aspect="auto",
+        cmap="plasma"
+    )
+    ax0.set_title(f"Average energy map ({process})")
+    ax0.set_xlabel(f"Feature {f1}")
+    ax0.set_ylabel(f"Feature {f2}")
+    fig.colorbar(im, ax=ax0, label="Avg Energy")
+
+    # Scatter plot of jets
+    ax1 = axes[1]
+    ax1.scatter(jets_f1, jets_f2, alpha=0.5, s=16, color="C1", edgecolor="k", linewidth=0.5)
+    ax1.set_title(f"Jets used for average ({process})")
+    ax1.set_xlabel(f"Feature {f1}")
+    ax1.set_ylabel(f"Feature {f2}")
+    ax1.set_xlim(vmin, vmax)
+    ax1.set_ylim(vmin, vmax)
+    ax1.grid(alpha=0.2)
+
+    plt.tight_layout()
+    outpath = os.path.join(savedir, f"avg_reco_energy_map_{process}.png")
+    plt.savefig(outpath, dpi=200)
+    plt.close()
+    print(f"[INFO] Saved {outpath}")
+
 # -------------------------
 # Main evaluation function
 # -------------------------
@@ -611,7 +766,8 @@ def run_full_evaluation(
     max_jets: int = 20000,
     pt_cut=None,
     wnae_params: dict = None,
-    generate_all_plots: bool = True
+    generate_all_plots: bool = True,
+    savedir: str = None
 ) -> Dict[str, Any]:
     """
     Run the full evaluation chain. Returns a summary dict containing computed metrics and saved paths.
@@ -635,10 +791,7 @@ def run_full_evaluation(
     BKG_NAMES = model_config["process"]
     if isinstance(BKG_NAMES, str):
         BKG_NAMES = [BKG_NAMES]
-    PCA_FILE = model_config.get("pca", None)
-    
-    if PCA_FILE and not os.path.isabs(PCA_FILE):
-        PCA_FILE = os.path.join(project_root, PCA_FILE)
+    SCALING_FILE = model_config["scaling_file"]
 
     if wnae_params is None:
         WNAE_PARAMS = WNAE_PARAM_PRESETS["DEFAULT_WNAE_PARAMS"].copy()
@@ -681,8 +834,8 @@ def run_full_evaluation(
     else:
         bkg_path = bkg_paths
         print(f"[INFO] Loading backgrounds: {BKG_NAMES} from {len(bkg_paths)} files")
-    
-    bkg_dataset = load_dataset(bkg_path, input_dim=INPUT_DIM, max_jets=max_jets, pt_cut=pt_cut)
+
+    bkg_dataset = load_dataset(bkg_path, input_dim=INPUT_DIM, scaling_file=SCALING_FILE, max_jets=max_jets, pt_cut=pt_cut)
     bkg_loader = DataLoader(bkg_dataset, batch_size=batch_size, sampler=SequentialSampler(bkg_dataset))
 
     # Signals
@@ -690,14 +843,14 @@ def run_full_evaluation(
     for name, sample in config.items():
         if name in BKG_NAMES:
             continue
-        
+
         sig_path = sample["path"]
         if not os.path.exists(sig_path):
             warnings.warn(f"Signal dataset not found: {sig_path}. Skipping {name}.")
             continue
-        
+
         print(f"[INFO] Loading signal: {name} from {sig_path}")
-        sig_dataset = load_dataset(sig_path, input_dim=INPUT_DIM, max_jets=max_jets, pt_cut=pt_cut)
+        sig_dataset = load_dataset(sig_path, input_dim=INPUT_DIM, scaling_file=SCALING_FILE, max_jets=max_jets, pt_cut=pt_cut)
         signal_loaders[name] = DataLoader(sig_dataset, batch_size=batch_size, sampler=SequentialSampler(sig_dataset))
 
     # Instantiate model and load checkpoint
@@ -782,6 +935,46 @@ def run_full_evaluation(
     except Exception as e:
         warnings.warn(f"plot_eff_vs_pt failed: {e}")
 
+    # Plot average energy maps for QCD and Top_bqq
+    try:
+        n_max_jets = 1000
+        # QCD
+        if "QCD" in config:
+            qcd_path = config["QCD"]["path"]
+            qcd_ds = JetDataset(qcd_path, input_dim=INPUT_DIM, scaling_file=SCALING_FILE)
+            n_jets_plot = min(n_max_jets, len(qcd_ds))
+            jets_tensor_qcd = torch.stack([qcd_ds[i][0] for i in range(n_jets_plot)])
+            plot_avg_reco_map_around_jets(
+                model=model,
+                jets_tensor=jets_tensor_qcd,
+                savedir=os.path.join(SAVEDIR, "plots"),
+                process="QCD",
+                feature_idx=(0, 1),
+                value_range=(-4, 4),
+                n_grid=100,
+                device=device_t
+            )
+            summary["plots"].append("avg_reco_energy_map_QCD.png")
+        # Top_bqq
+        if "Top_bqq" in config:
+            top_path = config["Top_bqq"]["path"]
+            top_ds = JetDataset(top_path, input_dim=INPUT_DIM, scaling_file=SCALING_FILE)
+            n_jets_plot = min(n_max_jets, len(top_ds))
+            jets_tensor_top = torch.stack([top_ds[i][0] for i in range(n_jets_plot)])
+            plot_avg_reco_map_around_jets(
+                model=model,
+                jets_tensor=jets_tensor_top,
+                savedir=os.path.join(SAVEDIR, "plots"),
+                process="Top_bqq",
+                feature_idx=(0, 1),
+                value_range=(-4, 4),
+                n_grid=100,
+                device=device_t
+            )
+            summary["plots"].append("avg_reco_energy_map_Top_bqq.png")
+    except Exception as e:
+        warnings.warn(f"plot_avg_reco_map_around_jets failed: {e}")
+
     print("[INFO] Evaluation complete.")
     return summary
 
@@ -813,18 +1006,140 @@ if __name__ == "__main__":
     else:
         wnae_params_dict = None  # run_full_evaluation will handle default
 
+    run_eval = input("Run full evaluation (plots, metrics, etc)? [y/N]: ").strip().lower()
+    summary = None
+    if run_eval == "y":
+        summary = run_full_evaluation(
+            checkpoint_path=args.checkpoint,
+            model_name=args.model_name,
+            config_path=args.config,
+            device=args.device,
+            batch_size=args.batch_size,
+            max_jets=args.max_jets,
+            pt_cut=args.pt_cut,
+            generate_all_plots=not args.no_plots,
+            savedir=args.savedir,
+            wnae_params=wnae_params_dict
+        )
+        print(json.dumps(summary, indent=2))
 
-    summary = run_full_evaluation(
-        checkpoint_path=args.checkpoint,
-        model_name=args.model_name,
-        config_path=args.config,
-        device=args.device,
-        batch_size=args.batch_size,
-        max_jets=args.max_jets,
-        pt_cut=args.pt_cut,
-        generate_all_plots=not args.no_plots,
-        savedir=args.savedir,
-        wnae_params=wnae_params_dict
-    )
-    print(json.dumps(summary, indent=2))
+    run_maps = input("Plot energy maps around a jet for QCD and Top_bqq? [y/N]: ").strip().lower()
+    if run_maps == "y":
+        try:
+            config_path = args.config
+            with open(config_path, "r") as f:
+                config = json.load(f)
+            model_config = MODEL_REGISTRY[args.model_name]
+            input_dim = model_config["input_dim"]
+            scaling_file = model_config["scaling_file"]
+            device_t = torch.device(args.device)
+            # Use model from summary if available, else reload
+            model = None
+            if summary is not None and "model" in summary:
+                model = summary["model"]
+            else:
+                model = WNAE(
+                    encoder=model_config["encoder"](),
+                    decoder=model_config["decoder"](),
+                    **(wnae_params_dict or WNAE_PARAM_PRESETS["DEFAULT_WNAE_PARAMS"]),
+                    device=device_t
+                )
+                checkpoint = torch.load(args.checkpoint, map_location=device_t, weights_only=False)
+                model.load_state_dict(checkpoint["model_state_dict"])
+                model.to(device_t)
+                model.eval()
+            # Plot for QCD
+            qcd_path = config["QCD"]["path"]
+            qcd_ds = JetDataset(qcd_path, input_dim=input_dim, scaling_file=scaling_file)
+            jet_tensor_qcd = qcd_ds[0][0].unsqueeze(0)  # shape [1, n_features]
+            plot_reco_map_around_selected_jet(
+                model=model,
+                jet_tensor=jet_tensor_qcd,
+                savedir=os.path.join(model_config["savedir"], "plots"),
+                process="QCD",
+                feature_idx=(0, 1),
+                value_range=(-4, 4),
+                n_grid=100,
+                device=device_t
+            )
+            # Plot for Top_bqq
+            if "Top_bqq" in config:
+                top_path = config["Top_bqq"]["path"]
+                top_ds = JetDataset(top_path, input_dim=input_dim, scaling_file=scaling_file)
+                jet_tensor_top = top_ds[0][0].unsqueeze(0)
+                plot_reco_map_around_selected_jet(
+                    model=model,
+                    jet_tensor=jet_tensor_top,
+                    savedir=os.path.join(model_config["savedir"], "plots"),
+                    process="Top_bqq",
+                    feature_idx=(0, 1),
+                    value_range=(-4, 4),
+                    n_grid=100,
+                    device=device_t
+                )
+            else:
+                print("[WARNING] Top_bqq not found in config, skipping Top_bqq energy map.")
+        except Exception as e:
+            print(f"[WARNING] plot_reco_map_around_selected_jet usage example failed: {e}")
 
+    run_maps = input("Plot average energy maps around jets for QCD and Top_bqq? [y/N]: ").strip().lower()
+    if run_maps == "y":
+        n_max_jets = 1000
+        try:
+            config_path = args.config
+            with open(config_path, "r") as f:
+                config = json.load(f)
+            model_config = MODEL_REGISTRY[args.model_name]
+            input_dim = model_config["input_dim"]
+            scaling_file = model_config["scaling_file"]
+            device_t = torch.device(args.device)
+            # Use model from summary if available, else reload
+            model = None
+            if summary is not None and "model" in summary:
+                model = summary["model"]
+            else:
+                model = WNAE(
+                    encoder=model_config["encoder"](),
+                    decoder=model_config["decoder"](),
+                    **(wnae_params_dict or WNAE_PARAM_PRESETS["DEFAULT_WNAE_PARAMS"]),
+                    device=device_t
+                )
+                checkpoint = torch.load(args.checkpoint, map_location=device_t, weights_only=False)
+                model.load_state_dict(checkpoint["model_state_dict"])
+                model.to(device_t)
+                model.eval()
+            # Plot for QCD
+            qcd_path = config["QCD"]["path"]
+            qcd_ds = JetDataset(qcd_path, input_dim=input_dim, scaling_file=scaling_file)
+            n_jets_plot = min(n_max_jets, len(qcd_ds))
+            jets_tensor_qcd = torch.stack([qcd_ds[i][0] for i in range(n_jets_plot)])
+            plot_avg_reco_map_around_jets(
+                model=model,
+                jets_tensor=jets_tensor_qcd,
+                savedir=os.path.join(model_config["savedir"], "plots"),
+                process="QCD",
+                feature_idx=(0, 1),
+                value_range=(-4, 4),
+                n_grid=100,
+                device=device_t
+            )
+            # Plot for Top_bqq
+            if "Top_bqq" in config:
+                top_path = config["Top_bqq"]["path"]
+                top_ds = JetDataset(top_path, input_dim=input_dim, scaling_file=scaling_file)
+                n_jets_plot = min(n_max_jets, len(top_ds))
+                jets_tensor_top = torch.stack([top_ds[i][0] for i in range(n_jets_plot)])
+                plot_avg_reco_map_around_jets(
+                    model=model,
+                    jets_tensor=jets_tensor_top,
+                    savedir=os.path.join(model_config["savedir"], "plots"),
+                    process="Top_bqq",
+                    feature_idx=(0, 1),
+                    value_range=(-4, 4),
+                    n_grid=100,
+                    device=device_t
+                )
+            else:
+                print("[WARNING] Top_bqq not found in config, skipping Top_bqq energy map.")
+        except Exception as e:
+            print(f"[WARNING] plot_avg_reco_map_around_jets usage example failed: {e}")
