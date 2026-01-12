@@ -401,6 +401,8 @@ def main():
                         help='Batch size for data loading')
     parser.add_argument('--n-plot-dims', type=int, default=16,
                         help='Number of dimensions to plot in detail')
+    parser.add_argument("--scaling_file", type=str, default="data/QCD.npz",
+                        help="Path to feature scaling file")
     
     args = parser.parse_args()
     
@@ -415,7 +417,7 @@ def main():
     
     # Load dataset
     print(f"Loading {args.process} dataset...")
-    dataset = JetDataset(dataset_config[args.process]["path"])
+    dataset = JetDataset(dataset_config[args.process]["path"],scaling_file=args.scaling_file)
     
     # Sample data
     sampler = RandomSampler(dataset, replacement=False, num_samples=min(args.n_samples, len(dataset)))

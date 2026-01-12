@@ -136,11 +136,11 @@ class GaussianLikelihoodTagger:
         print(f"Model loaded from {filepath}")
 
 
-def load_dataset_batched(file_path, n_samples=None, batch_size=1024):
+def load_dataset_batched(file_path, n_samples=None, batch_size=1024, scaling_file=None):
     """Load dataset in batches."""
     from torch.utils.data import DataLoader, RandomSampler
     
-    dataset = JetDataset(file_path)
+    dataset = JetDataset(file_path, scaling_file=scaling_file)
     
     if n_samples is not None:
         sampler = RandomSampler(dataset, replacement=False, num_samples=min(n_samples, len(dataset)))
@@ -294,7 +294,7 @@ def main():
     parser.add_argument('--bkg-process', type=str, default='QCD',
                         help='Background process name')
     parser.add_argument('--signal-processes', type=str, nargs='+',
-                        default=['GluGluHto2B', 'SVJ', 'Yto4Q', 'TTto4Q'],
+                        default=['GluGluHto2B', 'SVJ', 'Yto4Q', 'TTto4Q', 'Top_bqq'],
                         help='List of signal process names')
     parser.add_argument('--n-train', type=int, default=100000,
                         help='Number of background samples for training')
@@ -306,7 +306,9 @@ def main():
                         default=['full', 'diagonal', 'identity'],
                         help='Covariance types to test')
     parser.add_argument('--batch-size', type=int, default=2048,
-                        help='Batch size for data loading')
+                        help='Batch size for data loading'),
+    parser.add_argument("--scaling_file", type=str, default="data/QCD.npz",
+                        help="Path to feature scaling file")
     
     args = parser.parse_args()
     
@@ -324,7 +326,8 @@ def main():
     train_data = load_dataset_batched(
         dataset_config[args.bkg_process]["path"],
         n_samples=args.n_train,
-        batch_size=args.batch_size
+        batch_size=args.batch_size,
+        scaling_file=args.scaling_file
     )
     print(f"Training data shape: {train_data.shape}")
     
@@ -333,7 +336,8 @@ def main():
     test_bkg_data = load_dataset_batched(
         dataset_config[args.bkg_process]["path"],
         n_samples=args.n_test,
-        batch_size=args.batch_size
+        batch_size=args.batch_size,
+        scaling_file=args.scaling_file
     )
     
     # Load signal data
@@ -347,7 +351,8 @@ def main():
         sig_data = load_dataset_batched(
             dataset_config[sig_process]["path"],
             n_samples=args.n_test,
-            batch_size=args.batch_size
+            batch_size=args.batch_size,
+            scaling_file=args.scaling_file
         )
         signal_data_dict[sig_process] = sig_data
     

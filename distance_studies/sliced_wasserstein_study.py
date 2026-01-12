@@ -32,7 +32,7 @@ A_MEAN = 0.0
 A_STD  = 1.0
 
 B_MEAN = 0.0
-B_STD  = 1.0
+B_STD  = 0.2
 
 OUTPUT_FILE = "results/distance_study/sws_results.json"
 

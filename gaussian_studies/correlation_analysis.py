@@ -188,6 +188,8 @@ def main():
                        help="Subsample size for distance correlation (smaller=faster, default: 5k)")
     parser.add_argument("--load_distance_matrix", type=str, default=None,
                    help="Path to saved distance correlation matrix .npy file (skips computation)")
+    parser.add_argument("--scaling_file", type=str, default="data/QCD.npz",
+                       help="Path to feature scaling file")
     args = parser.parse_args()
 
     
@@ -206,7 +208,7 @@ def main():
         raise KeyError(f"Process {args.process} not found in config.")
     
     dataset_path = config[args.process]["path"]
-    dataset = JetDataset(dataset_path, input_dim=256)
+    dataset = JetDataset(dataset_path, input_dim=256, scaling_file=args.scaling_file)
     
     # Sample data
     print(f"\nSampling {args.batch_size} jets...")
